@@ -1,74 +1,28 @@
 #!/bin/bash
-
-# WireGuard VPN Server Configuration Script
-# ==========================================
-# Configura automáticamente un servidor WireGuard con peer OPNsense
-# Interfaz: wg0
-# AWS:       10.8.0.2/24
-# OPNsense:  10.8.0.1/32
-#
-# IMPORTANTE:
-# La public key SIEMPRE depende de la private key.
-# Si quieres mantener la misma public key tras reinstalar AWS,
-# debes reutilizar la misma private key.
-
 set -e
 
-echo "=== WireGuard VPN Server Setup ==="
-
-# -------------------------------------------------------------------
-# VARIABLES HARDCODEADAS
-# -------------------------------------------------------------------
-
-# Private key fija del nodo AWS
 AWS_PRIVATE_KEY="CCkfF3+aY3x9izEv5ixQYUg+GaNsAX3fBl6IvJNHaVI="
-
-# Public key del peer OPNsense
 OPNSENSE_PUBLIC_KEY="IakGqi12LzA3dlAwRGGjBm5OVaGCFdwdaucrAHb6K2Y="
-
-# Pre-shared key compartida
 WG_PRESHARED_KEY="f/ugcMua6IJzQkhLynGnIJSuCSbKZIRDNDyp6QH6JU8="
-
-# Redes detrás de OPNsense a las que AWS podrá llegar por el túnel
 OPNSENSE_ALLOWED_IPS="10.8.0.1/32,192.168.1.0/24,192.168.10.0/24,192.168.20.0/24"
-
-# Interfaz de salida a Internet en AWS
 WAN_IF="eth0"
+WAZUH_MANAGER="192.168.10.30"
+ZABBIX_SERVER="192.168.10.20"
 
-# -------------------------------------------------------------------
-
-echo "[*] Actualizando paquetes..."
 apt-get update -y > /dev/null 2>&1
-apt-get upgrade -y > /dev/null 2>&1
-apt-get install -y wireguard wireguard-tools iptables-persistent > /dev/null 2>&1
-echo "[✓] Paquetes instalados"
+apt-get install -y wireguard wireguard-tools iptables-persistent curl wget gpg > /dev/null 2>&1
 
-echo "[*] Habilitando IP forwarding..."
+# ── WireGuard ─────────────────────────────────────────────────────────────────
 sysctl -w net.ipv4.ip_forward=1 > /dev/null
-if ! grep -q "^net.ipv4.ip_forward=1$" /etc/sysctl.conf; then
-  echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
-fi
+grep -q "^net.ipv4.ip_forward=1" /etc/sysctl.conf || echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
 sysctl -p > /dev/null 2>&1
-echo "[✓] IP forwarding habilitado"
 
-echo "[*] Preparando /etc/wireguard..."
 mkdir -p /etc/wireguard/
 chmod 700 /etc/wireguard/
-cd /etc/wireguard/
-
-echo "[*] Escribiendo private key fija del servidor AWS..."
-printf '%s\n' "$AWS_PRIVATE_KEY" > privatekey
-chmod 600 privatekey
-
+printf '%s\n' "$AWS_PRIVATE_KEY" > /etc/wireguard/privatekey
+chmod 600 /etc/wireguard/privatekey
 PUBLIC_KEY=$(printf '%s' "$AWS_PRIVATE_KEY" | wg pubkey)
-printf '%s\n' "$PUBLIC_KEY" > publickey
-chmod 644 publickey
-
-echo "[✓] Keys preparadas"
-echo "[*] Servidor WireGuard:"
-echo "    Public Key: $PUBLIC_KEY"
-
-echo "[*] Generando configuración wg0.conf..."
+printf '%s\n' "$PUBLIC_KEY" > /etc/wireguard/publickey
 
 cat > /etc/wireguard/wg0.conf << WGCONFIG
 [Interface]
@@ -76,51 +30,53 @@ Address = 10.8.0.2/24
 ListenPort = 51820
 PrivateKey = ${AWS_PRIVATE_KEY}
 
-PostUp = iptables -A FORWARD -i wg0 -j ACCEPT; iptables -A FORWARD -o wg0 -j ACCEPT; iptables -t nat -A POSTROUTING -o ${WAN_IF} -j MASQUERADE
-PreDown = iptables -D FORWARD -i wg0 -j ACCEPT; iptables -D FORWARD -o wg0 -j ACCEPT; iptables -t nat -D POSTROUTING -o ${WAN_IF} -j MASQUERADE
+PostUp   = iptables -A FORWARD -i wg0 -j ACCEPT; iptables -A FORWARD -o wg0 -j ACCEPT; iptables -t nat -A POSTROUTING -o ${WAN_IF} -j MASQUERADE
+PreDown  = iptables -D FORWARD -i wg0 -j ACCEPT; iptables -D FORWARD -o wg0 -j ACCEPT; iptables -t nat -D POSTROUTING -o ${WAN_IF} -j MASQUERADE
 
 [Peer]
-PublicKey = ${OPNSENSE_PUBLIC_KEY}
-PreSharedKey = ${WG_PRESHARED_KEY}
-AllowedIPs = ${OPNSENSE_ALLOWED_IPS}
+PublicKey        = ${OPNSENSE_PUBLIC_KEY}
+PreSharedKey     = ${WG_PRESHARED_KEY}
+AllowedIPs       = ${OPNSENSE_ALLOWED_IPS}
 PersistentKeepalive = 25
 WGCONFIG
 
 chmod 600 /etc/wireguard/wg0.conf
-
-echo "[✓] Configuración creada: /etc/wireguard/wg0.conf"
-
-echo "[*] Preparando interfaz..."
 wg-quick down wg0 2>/dev/null || true
-sleep 1
-
-echo "[*] Activando interfaz WireGuard..."
 wg-quick up wg0
-echo "[✓] WireGuard activo"
-
-echo "[*] Habilitando inicio automático..."
-systemctl daemon-reload
 systemctl enable wg-quick@wg0.service > /dev/null 2>&1
-echo "[✓] Autostart habilitado"
 
-echo ""
-echo "=== ESTADO DE WIREGUARD ==="
-echo "Interface: wg0"
-echo "IP AWS: 10.8.0.2/24"
-echo "Peer OPNsense: 10.8.0.1/32"
-echo "Red remota OPNsense: 192.168.1.0/24"
-echo "Puerto: 51820/UDP"
-echo "Public Key AWS: $PUBLIC_KEY"
-echo ""
-echo "Peers configurados:"
-wg show wg0 | grep -A 5 "peer:" || echo "Esperando conexión de peers..."
-echo ""
-echo "Interfaces de red:"
-ip addr show wg0
-echo ""
-echo "=== SETUP COMPLETADO ==="
-echo "Para verificar:"
-echo "  sudo wg show wg0"
-echo "  sudo systemctl status wg-quick@wg0.service"
-echo "  ip route"
-echo ""
+# ── Zabbix Agent 2 ────────────────────────────────────────────────────────────
+wget -q https://repo.zabbix.com/zabbix/7.0/ubuntu/pool/main/z/zabbix-release/zabbix-release_latest+ubuntu24.04_all.deb -O /tmp/zabbix-release.deb
+dpkg -i /tmp/zabbix-release.deb > /dev/null 2>&1
+apt-get update -y > /dev/null 2>&1
+apt-get install -y zabbix-agent2 > /dev/null 2>&1
+
+HOSTNAME=$(hostname)
+cat > /etc/zabbix/zabbix_agent2.conf << ZBXCONF
+Server=${ZABBIX_SERVER}
+ServerActive=${ZABBIX_SERVER}
+Hostname=${HOSTNAME}
+LogFile=/var/log/zabbix/zabbix_agent2.log
+LogFileSize=10
+PidFile=/run/zabbix/zabbix_agent2.pid
+SocketDir=/run/zabbix
+ZBXCONF
+
+systemctl enable zabbix-agent2
+systemctl start zabbix-agent2
+
+# ── Wazuh Agent ───────────────────────────────────────────────────────────────
+# El agente se registra contra el manager on-prem a través del túnel WireGuard.
+# Reintentará la conexión hasta que el túnel esté activo.
+curl -s https://packages.wazuh.com/key/GPG-KEY-WAZUH | gpg --dearmor -o /usr/share/keyrings/wazuh.gpg
+echo "deb [signed-by=/usr/share/keyrings/wazuh.gpg] https://packages.wazuh.com/4.x/apt/ stable main" \
+  > /etc/apt/sources.list.d/wazuh.list
+apt-get update -y > /dev/null 2>&1
+WAZUH_MANAGER="${WAZUH_MANAGER}" apt-get install -y wazuh-agent > /dev/null 2>&1
+
+sed -i "s|<address>.*</address>|<address>${WAZUH_MANAGER}</address>|" /var/ossec/etc/ossec.conf
+sed -i "s|<protocol>.*</protocol>|<protocol>tcp</protocol>|" /var/ossec/etc/ossec.conf
+
+systemctl daemon-reload
+systemctl enable wazuh-agent
+systemctl start wazuh-agent
