@@ -23,7 +23,7 @@ OPNSENSE_ALLOWED_IPS="10.8.0.1/32,192.168.1.0/24,192.168.10.0/24,192.168.20.0/24
 # Paso 1: Instalar paquetes
 echo "[$(date)] Instalando WireGuard..."
 apt-get update
-apt-get install -y wireguard wireguard-tools iptables-persistent
+DEBIAN_FRONTEND=noninteractive apt-get install -y wireguard wireguard-tools iptables-persistent
 echo "[✓] WireGuard instalado"
 
 # Paso 2: Habilitar IP forwarding (necesario para actuar como router)
@@ -38,14 +38,18 @@ echo "[$(date)] Creando configuración WireGuard..."
 mkdir -p /etc/wireguard/
 chmod 700 /etc/wireguard/
 
+# Detectar la interfaz de red principal (ens5 en Ubuntu 24.04 en AWS)
+ETH=$(ip route | grep default | awk '{print $5}' | head -1)
+echo "[✓] Interfaz de red detectada: ${ETH}"
+
 cat > /etc/wireguard/wg0.conf << EOF
 [Interface]
 Address = 10.8.0.2/24
 ListenPort = 51820
 PrivateKey = ${AWS_PRIVATE_KEY}
 
-PostUp   = iptables -A FORWARD -i wg0 -j ACCEPT; iptables -A FORWARD -o wg0 -j ACCEPT; iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
-PreDown  = iptables -D FORWARD -i wg0 -j ACCEPT; iptables -D FORWARD -o wg0 -j ACCEPT; iptables -t nat -D POSTROUTING -o eth0 -j MASQUERADE
+PostUp   = iptables -A FORWARD -i wg0 -j ACCEPT; iptables -A FORWARD -o wg0 -j ACCEPT; iptables -t nat -A POSTROUTING -o ${ETH} ! -d 10.0.0.0/8 -j MASQUERADE
+PreDown  = iptables -D FORWARD -i wg0 -j ACCEPT; iptables -D FORWARD -o wg0 -j ACCEPT; iptables -t nat -D POSTROUTING -o ${ETH} ! -d 10.0.0.0/8 -j MASQUERADE
 
 [Peer]
 PublicKey = ${OPNSENSE_PUBLIC_KEY}
@@ -70,7 +74,7 @@ ip addr show wg0 | grep "inet 10.8"
 echo "Rutas:"
 ip route | grep 192.168
 echo "Servicio:"
-systemctl is-active wg-quick@wg0
+ip link show wg0 | grep -o "state [A-Z]*"
 echo "[✓] WireGuard Setup Completed"
 
 echo "[$(date)] === FIN ==="
