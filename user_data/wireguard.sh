@@ -29,9 +29,9 @@ echo "[✓] WireGuard instalado"
 # Paso 2: Habilitar IP forwarding (necesario para actuar como router)
 echo "[$(date)] Habilitando IP forwarding..."
 sysctl -w net.ipv4.ip_forward=1
-grep -q "^net.ipv4.ip_forward=1" /etc/sysctl.conf || echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
-sysctl -p
-echo "[✓] IP forwarding activo"
+echo "net.ipv4.ip_forward=1" > /etc/sysctl.d/99-wireguard-forwarding.conf
+sysctl -p /etc/sysctl.d/99-wireguard-forwarding.conf
+echo "[✓] IP forwarding activo: $(cat /proc/sys/net/ipv4/ip_forward)"
 
 # Paso 3: Crear config de WireGuard
 echo "[$(date)] Creando configuración WireGuard..."
