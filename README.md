@@ -234,7 +234,7 @@ glpi_private_ip         → IP privada de GLPI (10.0.2.10)
 ├── provider.tf          → Configuración del provider AWS
 ├── network.tf           → VPC, subnets, NAT Gateway, rutas
 ├── security.tf          → Security Groups
-├── ec2.tf               → Instancias EC2 y EIPs
+├── instances.tf         → Instancias EC2 y EIPs
 ├── variables.tf         → Variables configurables
 ├── outputs.tf           → Outputs para consultar post-deploy
 ├── README.md            → Este archivo
