@@ -119,6 +119,9 @@ Infraestructura AWS del proyecto DRACS (ASIX2). Arquitectura híbrida con VPN Wi
 | `key_name` | `dracs-keypair` | Key pair EC2 (debe existir en la cuenta) |
 | `ami_id` | `""` | AMI custom para migración entre cuentas. Vacío = Ubuntu 24.04 LTS latest |
 | `glpi_db_password` | *(requerida)* | Contraseña de la BD RDS de GLPI |
+| `wg_aws_private_key` | *(requerida)* | WireGuard private key del gateway AWS |
+| `wg_opnsense_public_key` | *(requerida)* | WireGuard public key del peer OPNsense |
+| `wg_preshared_key` | *(requerida)* | WireGuard preshared key (PSK) del túnel |
 | `create_ami_backup` | `false` | Crear AMI snapshots de WireGuard y Nginx |
 
 ### Gestionar la contraseña sin pasarla en CLI
@@ -126,11 +129,17 @@ Infraestructura AWS del proyecto DRACS (ASIX2). Arquitectura híbrida con VPN Wi
 ```bash
 # Crear terraform.tfvars (ya ignorado por .gitignore, no se sube al repo)
 cat > terraform.tfvars << 'EOF'
-glpi_db_password = "TuPasswordSegura"
+glpi_db_password       = "TuPasswordSegura"
+wg_aws_private_key     = "..."
+wg_opnsense_public_key = "..."
+wg_preshared_key       = "..."
 EOF
 
-# O via variable de entorno
+# O via variables de entorno
 export TF_VAR_glpi_db_password="TuPasswordSegura"
+export TF_VAR_wg_aws_private_key="..."
+export TF_VAR_wg_opnsense_public_key="..."
+export TF_VAR_wg_preshared_key="..."
 ```
 
 ## Despliegue

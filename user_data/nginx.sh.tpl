@@ -1,4 +1,5 @@
 #!/bin/bash
+set -e
 
 # =============================================================================
 # Nginx Reverse Proxy Setup for GLPI
@@ -21,13 +22,18 @@ systemctl enable nginx
 echo "[✓] Nginx instalado"
 
 # Paso 2: Generar certificado SSL auto-firmado (para HTTPS desde VPN)
-echo "[$(date)] Generando certificado SSL (auto-firmado)..."
+# Idempotente: solo regenera si no existe
 mkdir -p /etc/nginx/ssl
-openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
-  -keyout /etc/nginx/ssl/dracs.key \
-  -out /etc/nginx/ssl/dracs.crt \
-  -subj "/C=ES/O=Dracs/CN=dracs.local" 2>/dev/null
-echo "[✓] Certificado creado"
+if [ ! -f /etc/nginx/ssl/dracs.crt ]; then
+  echo "[$(date)] Generando certificado SSL (auto-firmado)..."
+  openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
+    -keyout /etc/nginx/ssl/dracs.key \
+    -out /etc/nginx/ssl/dracs.crt \
+    -subj "/C=ES/O=Dracs/CN=dracs.local" 2>/dev/null
+  echo "[✓] Certificado creado"
+else
+  echo "[✓] Certificado ya existe, saltando"
+fi
 
 # Paso 3: Configurar Nginx como reverse proxy hacia el ALB
 echo "[$(date)] Configurando reverse proxy hacia ALB ($ALB_DNS)..."

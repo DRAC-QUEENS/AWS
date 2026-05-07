@@ -16,7 +16,13 @@ resource "aws_instance" "wireguard" {
   vpc_security_group_ids = [aws_security_group.wireguard.id]
   private_ip             = "10.0.1.10"
   source_dest_check      = false
-  user_data              = file("user_data/wireguard.sh")
+
+  # Inyecta las claves WireGuard (sensitive vars) en el script de bootstrap
+  user_data = templatefile("user_data/wireguard.sh.tpl", {
+    aws_private_key     = var.wg_aws_private_key
+    opnsense_public_key = var.wg_opnsense_public_key
+    preshared_key       = var.wg_preshared_key
+  })
 
   root_block_device {
     volume_size = 20

@@ -116,39 +116,22 @@ resource "aws_route_table_association" "privada_b" {
 }
 
 # ---------- ROUTES A REDES ON-PREM (via WireGuard) ----------
+# Las rutas se generan por for_each para cada CIDR on-prem en ambas RTs.
 
-resource "aws_route" "to_onprem_mgmt_public" {
+locals {
+  onprem_cidrs = ["192.168.1.0/24", "192.168.10.0/24", "192.168.20.0/24"]
+}
+
+resource "aws_route" "onprem_public" {
+  for_each               = toset(local.onprem_cidrs)
   route_table_id         = aws_route_table.publica.id
-  destination_cidr_block = "192.168.1.0/24"
+  destination_cidr_block = each.value
   network_interface_id   = aws_instance.wireguard.primary_network_interface_id
 }
 
-resource "aws_route" "to_onprem_servers_public" {
-  route_table_id         = aws_route_table.publica.id
-  destination_cidr_block = "192.168.10.0/24"
-  network_interface_id   = aws_instance.wireguard.primary_network_interface_id
-}
-
-resource "aws_route" "to_onprem_clients_public" {
-  route_table_id         = aws_route_table.publica.id
-  destination_cidr_block = "192.168.20.0/24"
-  network_interface_id   = aws_instance.wireguard.primary_network_interface_id
-}
-
-resource "aws_route" "to_onprem_mgmt_private" {
+resource "aws_route" "onprem_private" {
+  for_each               = toset(local.onprem_cidrs)
   route_table_id         = aws_route_table.privada.id
-  destination_cidr_block = "192.168.1.0/24"
-  network_interface_id   = aws_instance.wireguard.primary_network_interface_id
-}
-
-resource "aws_route" "to_onprem_servers_private" {
-  route_table_id         = aws_route_table.privada.id
-  destination_cidr_block = "192.168.10.0/24"
-  network_interface_id   = aws_instance.wireguard.primary_network_interface_id
-}
-
-resource "aws_route" "to_onprem_clients_private" {
-  route_table_id         = aws_route_table.privada.id
-  destination_cidr_block = "192.168.20.0/24"
+  destination_cidr_block = each.value
   network_interface_id   = aws_instance.wireguard.primary_network_interface_id
 }

@@ -1,4 +1,5 @@
 #!/bin/bash
+set -e
 
 # =============================================================================
 # GLPI ASG Instance Setup
@@ -35,8 +36,8 @@ mkdir -p /var/www/html/glpi/files
 mount -t nfs4 -o nfsvers=4.1,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2 \
   "$EFS_DNS:/" /var/www/html/glpi/files
 
-# Persistir el mount entre reinicios
-echo "$EFS_DNS:/ /var/www/html/glpi/files nfs4 nfsvers=4.1,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2,_netdev 0 0" >> /etc/fstab
+# Persistir el mount entre reinicios (idempotente: solo si no esta ya en fstab)
+grep -q "glpi/files" /etc/fstab || echo "$EFS_DNS:/ /var/www/html/glpi/files nfs4 nfsvers=4.1,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2,_netdev 0 0" >> /etc/fstab
 
 # El mount resetea la propiedad del directorio; restaurar para que Apache escriba
 chown www-data:www-data /var/www/html/glpi/files
@@ -69,11 +70,17 @@ EOF
 chown www-data:www-data /var/www/html/glpi/config/config_db.php
 echo "[✓] config_db.php configurado (BD: $RDS_ENDPOINT)"
 
-# Paso 5: Inicializar BD solo si las tablas no existen aun
-# (solo la primera instancia del ASG hace esto; las siguientes lo detectan y saltan)
+# Paso 5: Inicializar BD solo si las tablas no existen aun.
+# Lock en EFS (compartido entre instancias del ASG) para evitar race condition
+# si dos instancias arrancan a la vez y ambas intentan db:install.
+echo "[$(date)] Comprobando estado de la BD (con lock en EFS)..."
+exec 9>/var/www/html/glpi/files/.db-init.lock
+flock -x 9
+
+# || echo "" tolera fallos de conexion al RDS (puede no estar listo aun)
 DB_EXISTS=$(mysql -h "$RDS_ENDPOINT" -u "$DB_USER" -p"$DB_PASS" \
   -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='$DB_NAME';" \
-  2>/dev/null | tail -1)
+  2>/dev/null | tail -1 || echo "")
 
 if [ "$DB_EXISTS" = "0" ] || [ -z "$DB_EXISTS" ]; then
   echo "[$(date)] Inicializando BD GLPI en RDS..."
@@ -82,11 +89,13 @@ if [ "$DB_EXISTS" = "0" ] || [ -z "$DB_EXISTS" ]; then
     --db-name="$DB_NAME" \
     --db-user="$DB_USER" \
     --db-password="$DB_PASS" \
-    --no-interaction 2>&1 | tail -10
+    --no-interaction
   echo "[✓] BD inicializada"
 else
   echo "[✓] BD ya existente ($DB_EXISTS tablas), saltando inicializacion"
 fi
+
+flock -u 9
 
 # Paso 6: VirtualHost Apache
 echo "[$(date)] Configurando Apache VirtualHost..."
@@ -111,8 +120,4 @@ a2enmod rewrite
 systemctl restart apache2
 echo "[✓] Apache configurado"
 
-echo "[$(date)] === Verificacion final ==="
-systemctl is-active apache2
-echo "EFS files:"
-ls /var/www/html/glpi/files/ 2>/dev/null | head -5
 echo "[$(date)] === FIN ==="

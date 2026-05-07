@@ -181,11 +181,6 @@ resource "aws_launch_template" "glpi" {
       encrypted   = true
     }
   }
-
-  tag_specifications {
-    resource_type = "instance"
-    tags          = { Name = "ec2-glpi-asg-dracs" }
-  }
 }
 
 resource "aws_autoscaling_group" "glpi" {
