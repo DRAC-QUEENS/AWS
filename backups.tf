@@ -101,23 +101,9 @@ resource "aws_ami_from_instance" "nginx" {
   depends_on = [aws_instance.nginx]
 }
 
-# AMI de GLPI (Inventory Management - CRÍTICA)
-resource "aws_ami_from_instance" "glpi" {
-  count                   = var.create_ami_backup ? 1 : 0
-  name                    = "glpi-server-${formatdate("YYYY-MM-DD-hhmm", timestamp())}"
-  source_instance_id      = aws_instance.glpi.id
-  snapshot_without_reboot = true
-
-  tags = {
-    Name             = "glpi-backup"
-    Description      = "GLPI Inventory Server backup (CRÍTICA)"
-    BackupDate       = formatdate("YYYY-MM-DD hh:mm:ss", timestamp())
-    OriginalInstance = aws_instance.glpi.id
-    Criticality      = "HIGH"
-  }
-
-  depends_on = [aws_instance.glpi]
-}
+# Nota: AMI de GLPI eliminada. Con RDS + EFS, las instancias del ASG son
+# efimeras (sin estado). Los datos persisten en RDS (snapshots automaticos)
+# y en EFS. Para migration de cuenta, usar el ami_id variable.
 
 # Outputs de AMI IDs para referencia
 output "ami_wireguard_id" {
@@ -128,9 +114,4 @@ output "ami_wireguard_id" {
 output "ami_nginx_id" {
   description = "AMI ID del Nginx (si se creó)"
   value       = try(aws_ami_from_instance.nginx[0].id, "No creada - ejecuta: terraform apply -var create_ami_backup=true")
-}
-
-output "ami_glpi_id" {
-  description = "AMI ID del GLPI (si se creó)"
-  value       = try(aws_ami_from_instance.glpi[0].id, "No creada - ejecuta: terraform apply -var create_ami_backup=true")
 }

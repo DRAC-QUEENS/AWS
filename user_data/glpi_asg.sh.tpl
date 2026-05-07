@@ -1,0 +1,114 @@
+#!/bin/bash
+
+# =============================================================================
+# GLPI ASG Instance Setup
+# =============================================================================
+# Configura cada instancia del Auto Scaling Group del GLPI.
+# - MariaDB NO se instala localmente (BD en RDS: ${rds_endpoint})
+# - /var/www/html/glpi/files/ se comparte via EFS (${efs_dns})
+# - La BD se inicializa solo en la primera instancia; las siguientes
+#   detectan que ya existe y solo configuran el config_db.php
+# =============================================================================
+
+echo "[$(date)] === GLPI ASG Instance Setup Started ==="
+
+GLPI_VERSION="10.0.18"
+RDS_ENDPOINT="${rds_endpoint}"
+DB_NAME="glpi"
+DB_USER="glpi"
+DB_PASS="${db_password}"
+EFS_DNS="${efs_dns}"
+
+# Paso 1: Instalar Apache, PHP y cliente MariaDB (sin servidor de BD)
+echo "[$(date)] Instalando Apache, PHP y dependencias..."
+apt-get update
+DEBIAN_FRONTEND=noninteractive apt-get install -y \
+  apache2 nfs-common mariadb-client \
+  php php-mysql php-curl php-gd php-intl php-ldap \
+  php-mbstring php-xml php-xmlrpc php-zip php-bz2 php-imap php-apcu
+systemctl enable apache2
+echo "[✓] Apache y PHP instalados"
+
+# Paso 2: Montar EFS para ficheros compartidos (uploads, logs, sesiones)
+echo "[$(date)] Montando EFS ($EFS_DNS)..."
+mkdir -p /var/www/html/glpi/files
+mount -t nfs4 -o nfsvers=4.1,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2 \
+  "$EFS_DNS:/" /var/www/html/glpi/files
+
+# Persistir el mount entre reinicios
+echo "$EFS_DNS:/ /var/www/html/glpi/files nfs4 nfsvers=4.1,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2,_netdev 0 0" >> /etc/fstab
+echo "[✓] EFS montado en /var/www/html/glpi/files"
+
+# Paso 3: Descargar e instalar GLPI si no existe ya
+if [ ! -f /var/www/html/glpi/index.php ]; then
+  echo "[$(date)] Descargando GLPI $GLPI_VERSION..."
+  cd /tmp
+  wget -q "https://github.com/glpi-project/glpi/releases/download/$GLPI_VERSION/glpi-$GLPI_VERSION.tgz"
+  tar -xzf "glpi-$GLPI_VERSION.tgz" -C /var/www/html/
+  chown -R www-data:www-data /var/www/html/glpi
+  chmod -R 755 /var/www/html/glpi
+  echo "[✓] GLPI extraido"
+fi
+
+# Paso 4: Configurar config_db.php apuntando a RDS
+# Se sobreescribe en cada arranque para garantizar que apunta al RDS correcto
+mkdir -p /var/www/html/glpi/config
+cat > /var/www/html/glpi/config/config_db.php << 'EOF'
+<?php
+class DB extends DBmysql {
+   public $dbhost     = '${rds_endpoint}';
+   public $dbuser     = 'glpi';
+   public $dbpassword = '${db_password}';
+   public $dbdefault  = 'glpi';
+}
+EOF
+chown www-data:www-data /var/www/html/glpi/config/config_db.php
+echo "[✓] config_db.php configurado (BD: $RDS_ENDPOINT)"
+
+# Paso 5: Inicializar BD solo si las tablas no existen aun
+# (solo la primera instancia del ASG hace esto; las siguientes lo detectan y saltan)
+DB_EXISTS=$(mysql -h "$RDS_ENDPOINT" -u "$DB_USER" -p"$DB_PASS" \
+  -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='$DB_NAME';" \
+  2>/dev/null | tail -1)
+
+if [ "$DB_EXISTS" = "0" ] || [ -z "$DB_EXISTS" ]; then
+  echo "[$(date)] Inicializando BD GLPI en RDS..."
+  php /var/www/html/glpi/bin/console db:install \
+    --db-host="$RDS_ENDPOINT" \
+    --db-name="$DB_NAME" \
+    --db-user="$DB_USER" \
+    --db-password="$DB_PASS" \
+    --no-interaction 2>&1 | tail -10
+  echo "[✓] BD inicializada"
+else
+  echo "[✓] BD ya existente ($DB_EXISTS tablas), saltando inicializacion"
+fi
+
+# Paso 6: VirtualHost Apache
+echo "[$(date)] Configurando Apache VirtualHost..."
+cat > /etc/apache2/sites-available/glpi.conf << 'APACHE_CONF'
+<VirtualHost *:80>
+    DocumentRoot /var/www/html/glpi/public
+
+    <Directory /var/www/html/glpi/public>
+        Options FollowSymLinks
+        AllowOverride All
+        Require all granted
+    </Directory>
+
+    ErrorLog /var/log/apache2/glpi_error.log
+    CustomLog /var/log/apache2/glpi_access.log combined
+</VirtualHost>
+APACHE_CONF
+
+a2ensite glpi.conf
+a2dissite 000-default.conf
+a2enmod rewrite
+systemctl restart apache2
+echo "[✓] Apache configurado"
+
+echo "[$(date)] === Verificacion final ==="
+systemctl is-active apache2
+echo "EFS files:"
+ls /var/www/html/glpi/files/ 2>/dev/null | head -5
+echo "[$(date)] === FIN ==="

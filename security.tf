@@ -68,19 +68,48 @@ resource "aws_security_group" "nginx" {
   tags = { Name = "sg-nginx-dracs" }
 }
 
-resource "aws_security_group" "glpi" {
-  name   = "glpi-dracs"
+# ALB: recibe trafico desde internet (NLB incluido) y desde Nginx (trafico WireGuard)
+resource "aws_security_group" "alb" {
+  name   = "alb-glpi-dracs"
   vpc_id = aws_vpc.main.id
 
   ingress {
-    description     = "HTTP desde Nginx"
+    description = "HTTP desde internet y NLB"
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+  ingress {
+    description     = "HTTP desde Nginx (trafico interno via WireGuard)"
     from_port       = 80
     to_port         = 80
     protocol        = "tcp"
     security_groups = [aws_security_group.nginx.id]
   }
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+  tags = { Name = "sg-alb-dracs" }
+}
+
+# GLPI ASG: solo recibe HTTP desde el ALB (el resto de acceso via VPN)
+resource "aws_security_group" "glpi" {
+  name   = "glpi-dracs"
+  vpc_id = aws_vpc.main.id
+
   ingress {
-    description = "Acceso desde la VPN y on-prem"
+    description     = "HTTP desde ALB"
+    from_port       = 80
+    to_port         = 80
+    protocol        = "tcp"
+    security_groups = [aws_security_group.alb.id]
+  }
+  ingress {
+    description = "Acceso admin desde VPN y on-prem"
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
@@ -93,4 +122,46 @@ resource "aws_security_group" "glpi" {
     cidr_blocks = ["0.0.0.0/0"]
   }
   tags = { Name = "sg-glpi-dracs" }
+}
+
+# RDS: solo accesible desde las instancias GLPI del ASG
+resource "aws_security_group" "rds" {
+  name   = "rds-glpi-dracs"
+  vpc_id = aws_vpc.main.id
+
+  ingress {
+    description     = "MariaDB desde instancias GLPI"
+    from_port       = 3306
+    to_port         = 3306
+    protocol        = "tcp"
+    security_groups = [aws_security_group.glpi.id]
+  }
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+  tags = { Name = "sg-rds-dracs" }
+}
+
+# EFS: solo accesible desde las instancias GLPI del ASG
+resource "aws_security_group" "efs" {
+  name   = "efs-glpi-dracs"
+  vpc_id = aws_vpc.main.id
+
+  ingress {
+    description     = "NFS desde instancias GLPI"
+    from_port       = 2049
+    to_port         = 2049
+    protocol        = "tcp"
+    security_groups = [aws_security_group.glpi.id]
+  }
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+  tags = { Name = "sg-efs-dracs" }
 }

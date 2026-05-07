@@ -26,14 +26,29 @@ resource "aws_subnet" "public" {
   cidr_block              = "10.0.1.0/24"
   availability_zone       = data.aws_availability_zones.azs.names[0]
   map_public_ip_on_launch = true
-  tags                    = { Name = "subnet-publica-dracs" }
+  tags                    = { Name = "subnet-publica-a-dracs" }
+}
+
+resource "aws_subnet" "public_b" {
+  vpc_id                  = aws_vpc.main.id
+  cidr_block              = "10.0.3.0/24"
+  availability_zone       = data.aws_availability_zones.azs.names[1]
+  map_public_ip_on_launch = true
+  tags                    = { Name = "subnet-publica-b-dracs" }
 }
 
 resource "aws_subnet" "private" {
   vpc_id            = aws_vpc.main.id
   cidr_block        = "10.0.2.0/24"
   availability_zone = data.aws_availability_zones.azs.names[0]
-  tags              = { Name = "subnet-privada-dracs" }
+  tags              = { Name = "subnet-privada-a-dracs" }
+}
+
+resource "aws_subnet" "private_b" {
+  vpc_id            = aws_vpc.main.id
+  cidr_block        = "10.0.4.0/24"
+  availability_zone = data.aws_availability_zones.azs.names[1]
+  tags              = { Name = "subnet-privada-b-dracs" }
 }
 
 # ---------- INTERNET GATEWAY ----------
@@ -84,8 +99,19 @@ resource "aws_route_table_association" "publica" {
   route_table_id = aws_route_table.publica.id
 }
 
+resource "aws_route_table_association" "publica_b" {
+  subnet_id      = aws_subnet.public_b.id
+  route_table_id = aws_route_table.publica.id
+}
+
 resource "aws_route_table_association" "privada" {
   subnet_id      = aws_subnet.private.id
+  route_table_id = aws_route_table.privada.id
+}
+
+# private_b comparte NAT Gateway con private_a (mismo AZ cost vs. resiliencia)
+resource "aws_route_table_association" "privada_b" {
+  subnet_id      = aws_subnet.private_b.id
   route_table_id = aws_route_table.privada.id
 }
 

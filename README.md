@@ -82,7 +82,8 @@ Infraestructura de AWS para el proyecto DRACS Hybrid, con arquitectura segmentad
 ```
 Inbound:
   ✅ 51820/UDP   → 0.0.0.0/0     (WireGuard VPN)
-  ✅ 22/TCP      → 0.0.0.0/0     (SSH)
+  ✅ 22/TCP      → 10.8.0.0/24   (SSH solo desde túnel VPN)
+  ✅ todo        → 10.0.0.0/16   (tráfico interno VPC para forwarding)
 Outbound:
   ✅ Todo (-)
 ```
@@ -92,7 +93,7 @@ Outbound:
 Inbound:
   ✅ 80/TCP      → 0.0.0.0/0     (HTTP)
   ✅ 443/TCP     → 0.0.0.0/0     (HTTPS)
-  ✅ 22/TCP      → 0.0.0.0/0     (SSH)
+  ✅ 22/TCP      → 10.8.0.0/24   (SSH solo desde túnel VPN)
 Outbound:
   ✅ Todo (-)
 ```
@@ -101,9 +102,7 @@ Outbound:
 ```
 Inbound:
   ✅ 80/TCP      → sg-nginx      (HTTP desde Nginx)
-  ✅ 443/TCP     → sg-nginx      (HTTPS desde Nginx)
-  ✅ 0-65535     → 10.8.0.0/24   (Todo desde VPN WireGuard)
-  ✅ 22/TCP      → 0.0.0.0/0     (SSH - abierto)
+  ✅ todo        → 10.8.0.0/24, 192.168.1/10/20.0/24  (VPN + on-prem)
 Outbound:
   ✅ Todo (-)
 ```
