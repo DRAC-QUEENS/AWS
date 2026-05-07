@@ -1,284 +1,238 @@
 # AWS DRACS Hybrid Infrastructure
 
-Infraestructura de AWS para el proyecto DRACS Hybrid, con arquitectura segmentada de red privada/pública, VPN mediante WireGuard, proxy inverso con Nginx y gestor de inventario GLPI.
+Infraestructura AWS del proyecto DRACS (ASIX2). Arquitectura híbrida con VPN WireGuard site-to-site hacia un cluster Proxmox on-prem, GLPI como sistema de inventario con alta disponibilidad en 2 AZs, y backend remoto de Terraform en S3.
 
-## 🏗️ Arquitectura
+## Arquitectura
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                      AWS VPC (10.0.0.0/16)                  │
-├─────────────────────────────────────────────────────────────┤
-│                                                               │
-│  ┌──────────────────────┐         ┌─────────────────────┐   │
-│  │  PUBLIC SUBNET       │         │  PRIVATE SUBNET     │   │
-│  │  (10.0.1.0/24)       │         │  (10.0.2.0/24)      │   │
-│  │                      │         │                     │   │
-│  │  ┌────────────────┐  │         │  ┌───────────────┐  │   │
-│  │  │   WireGuard    │  │         │  │     GLPI      │  │   │
-│  │  │ EC2 (VPN Gate) │  │         │  │   EC2 (BD)    │  │   │
-│  │  │ 10.0.1.10      │  │         │  │  10.0.2.10    │  │   │
-│  │  │ EIP: Dynamic   │  │         │  │ (Private)     │  │   │
-│  │  │ Port: 51820/UDP│  │         │  │               │  │   │
-│  │  └────────────────┘  │         │  └───────────────┘  │   │
-│  │                      │         │                     │   │
-│  │  ┌────────────────┐  │         │                     │   │
-│  │  │    Nginx       │  │         │                     │   │
-│  │  │  EC2 (Proxy)   │  │         │                     │   │
-│  │  │ 10.0.1.20      │  │         │                     │   │
-│  │  │ EIP: Dynamic   │  │         │                     │   │
-│  │  │ Ports: 80/443  │  │         │                     │   │
-│  │  └────────────────┘  │         │                     │   │
-│  │      │                │         │                     │   │
-│  │      └────────────────────────→│ (proxy_pass)        │   │
-│  └──────────────────────┘         └─────────────────────┘   │
-│           │                               │                  │
-│      NAT ↕ Gateway                       │                  │
-│    (0.0.0.0 outbound)                    │                  │
-│           │                               │                  │
-│  Internet Gateway (0.0.0.0 inbound)      │                  │
-└─────────────────────────────────────────────────────────────┘
-         │                             │
-    Entrada pública             Acceso privado
-   (WG + Nginx)                (VPN o Nginx)
+                         INTERNET
+                             │
+                    ┌────────┴────────┐
+                    │  NLB (EIP fija) │  ← DuckDNS apunta aquí
+                    └────────┬────────┘
+                             │ TCP:80
+                    ┌────────┴────────┐
+                    │      ALB        │  HTTP:80, 2 AZs
+                    └────────┬────────┘
+               ┌─────────────┴─────────────┐
+        AZ a (us-east-1a)          AZ b (us-east-1b)
+     ┌──────────────────┐       ┌──────────────────┐
+     │ PRIVATE 10.0.2.x │       │ PRIVATE 10.0.4.x │
+     │  ┌─────────────┐ │       │  ┌─────────────┐ │
+     │  │  GLPI (ASG) │ │       │  │  GLPI (ASG) │ │
+     │  └──────┬──────┘ │       │  └──────┬──────┘ │
+     └─────────┼────────┘       └─────────┼────────┘
+               └──────────┬───────────────┘
+                      ┌───┴────┐     ┌──────────┐
+                      │  RDS   │     │   EFS    │
+                      │MariaDB │     │  /files  │
+                      └────────┘     └──────────┘
+
+     PUBLIC 10.0.1.x                PUBLIC 10.0.3.x
+  ┌────────────────────┐         ┌──────────────────┐
+  │ WireGuard (10.0.1.10)│        │   (sin instancias)│
+  │ Nginx     (10.0.1.20)│        │                  │
+  └─────────────────────┘        └──────────────────┘
+           ↕ WireGuard VPN (10.8.0.0/24)
+     OPNsense on-prem (192.168.x.x)
+
+  Trafico interno (Proxmox → GLPI):
+    OPNsense → WireGuard EC2 → Nginx (10.0.1.20) → ALB → GLPI ASG
 ```
 
-## 📋 Componentes
+## Componentes
 
-### **WireGuard (VPN Gateway)**
-- **Descripción**: Servidor VPN para acceso seguro remoto a la infraestructura
-- **Tipo**: EC2 t3.micro (Ubuntu 24.04 LTS)
-- **Red**: Subnet pública, IP privada fija (10.0.1.10)
-- **IP Elástica**: Sí (persistente entre reinicios)
-- **Puertos**: 51820/UDP (VPN)
-- **SSH**: Abierto desde cualquier IP (⚠️ considerar restringir en producción)
-- **Tunelización**: Desactiva source check para permitir tráfico de otros clientes
-- **Rol**: Único punto de entrada para tráfico remoto seguro
+### WireGuard — VPN Gateway
+- EC2 t3.micro, subnet pública, IP fija 10.0.1.10, EIP
+- Túnel site-to-site UDP:51820 con OPNsense on-prem
+- `source_dest_check = false` para actuar como router
+- Script: `user_data/wireguard.sh`
 
-### **Nginx (Reverse Proxy)**
-- **Descripción**: Proxy inverso y balanceador de carga para aplicaciones
-- **Tipo**: EC2 t3.micro (Ubuntu 24.04 LTS)
-- **Red**: Subnet pública, IP privada fija (10.0.1.20)
-- **IP Elástica**: Sí (para DNS/CNAME estables)
-- **Puertos**: 80/TCP (HTTP), 443/TCP (HTTPS)
-- **Backend**: GLPI en subnet privada (10.0.2.10)
-- **SSH**: Abierto desde cualquier IP
-- **Función**: Expone GLPI de forma segura hacia internet/usuarios autenticados
+### Nginx — Reverse Proxy interno
+- EC2 t3.micro, subnet pública, IP fija 10.0.1.20, EIP
+- Sirve el tráfico interno (WireGuard/Proxmox) hacia el ALB
+- SSL auto-firmado para HTTPS desde la VPN
+- Script: `user_data/nginx.sh.tpl` (el DNS del ALB se inyecta en tiempo de despliegue)
 
-### **GLPI (Inventory Management)**
-- **Descripción**: Sistema de gestión de inventario de TI
-- **Tipo**: EC2 t3.micro (Ubuntu 24.04 LTS)
-- **Red**: Subnet privada, IP privada fija (10.0.2.10)
-- **IP Pública**: No (acceso solo a través de NAT Gateway o Nginx)
-- **Acceso HTTP/HTTPS**: Solo desde Nginx (10.0.1.20)
-- **Acceso SSH**: Open (considerar restringir a VPN en producción)
-- **Almacenamiento**: EBS gp3 (raíz)
-- **Rol**: Aplicación crítica, datos no deben ser accesibles directamente
+### NLB — IP fija para DuckDNS
+- Network Load Balancer con Elastic IP estática
+- DuckDNS apunta a esta IP; el NLB delega al ALB
+- Sin SG propio (NLBs no tienen security groups)
 
-## 🔒 Seguridad
+### ALB — Balanceador HTTP
+- Application Load Balancer internet-facing en 2 AZs
+- Health checks al path `/glpi/` con 30s de intervalo
+- Distribuye tráfico entre instancias del ASG
 
-### Security Groups
+### GLPI — Auto Scaling Group (2 AZs)
+- Launch Template: t3.small, AMI configurable via variable
+- ASG: min=1, max=3, desired=1 (escala según carga)
+- Script: `user_data/glpi_asg.sh.tpl`
+- Instancias **sin estado**: la BD está en RDS y los ficheros en EFS
 
-#### **wireguard-dracs**
-```
-Inbound:
-  ✅ 51820/UDP   → 0.0.0.0/0     (WireGuard VPN)
-  ✅ 22/TCP      → 10.8.0.0/24   (SSH solo desde túnel VPN)
-  ✅ todo        → 10.0.0.0/16   (tráfico interno VPC para forwarding)
-Outbound:
-  ✅ Todo (-)
-```
+### RDS — MariaDB 10.11
+- db.t3.micro, 20 GB gp3, cifrado en reposo
+- Subnets privadas en ambas AZs (subnet group)
+- Solo accesible desde las instancias del ASG (SG restringido)
+- Backups automáticos gestionados por AWS
 
-#### **nginx-dracs**
-```
-Inbound:
-  ✅ 80/TCP      → 0.0.0.0/0     (HTTP)
-  ✅ 443/TCP     → 0.0.0.0/0     (HTTPS)
-  ✅ 22/TCP      → 10.8.0.0/24   (SSH solo desde túnel VPN)
-Outbound:
-  ✅ Todo (-)
-```
+### EFS — Almacenamiento compartido
+- Filesystem NFS compartido entre todas las instancias del ASG
+- Montado en `/var/www/html/glpi/files/` (uploads, logs, attachments)
+- Mount targets en `private` (AZ a) y `private_b` (AZ b)
 
-#### **glpi-dracs**
-```
-Inbound:
-  ✅ 80/TCP      → sg-nginx      (HTTP desde Nginx)
-  ✅ todo        → 10.8.0.0/24, 192.168.1/10/20.0/24  (VPN + on-prem)
-Outbound:
-  ✅ Todo (-)
-```
+## Security Groups
 
-### Network Segmentation
+| SG | Ingress | Egress |
+|----|---------|--------|
+| `wireguard-dracs` | UDP:51820 (0.0.0.0/0), TCP:22 (VPN 10.8.0.0/24), todo desde VPC (10.0.0.0/16) | Todo |
+| `nginx-dracs` | TCP:80/443 (0.0.0.0/0), TCP:22 (VPN) | Todo |
+| `alb-glpi-dracs` | TCP:80 (0.0.0.0/0), TCP:80 desde nginx SG | Todo |
+| `glpi-dracs` | TCP:80 desde alb SG, todo desde VPN + on-prem | Todo |
+| `rds-glpi-dracs` | TCP:3306 desde glpi SG | Todo |
+| `efs-glpi-dracs` | TCP:2049 desde glpi SG | Todo |
 
-- **Public Subnet (10.0.1.0/24)**: WireGuard + Nginx (acceso internet directo)
-- **Private Subnet (10.0.2.0/24)**: GLPI (outbound solo por NAT Gateway)
-- **NAT Gateway**: Punto único de egreso para subnet privada
-
-## 🪧 Elastic IPs (EIPs)
-
-| Recurso | EIP | Uso |
-|---------|-----|-----|
-| WireGuard | ✅ Dynamic (generada) | Acceso VPN estable desde internet |
-| Nginx | ✅ Dynamic (generada) | Acceso HTTP/HTTPS estable |
-| NAT Gateway | ✅ Dynamic (generada) | Outbound IP fija para subnet privada |
-
-**Importante**: Las EIPs evitan cambios de dirección pública ante reinicios. Para producción, considera registrar las EIPs en Route53 o DNS corporativo.
-
-## 🚀 Despliegue
-
-### Requisitos previos
-- AWS Account activa con credenciales configuradas
-- Terraform >= 1.5.0
-- Key pair EC2 creado (por defecto: `dracs-keypair`)
-- AWS CLI configurado (opcional pero recomendado)
-
-### Variables disponibles
-
-```bash
-# Región AWS (default: us-east-1)
-aws_region = "us-east-1"
-
-# Tipo de instancia (default: t3.micro - libre en laboratorio)
-instance_type = "t3.micro"
-
-# Key pair para SSH (default: dracs-keypair)
-key_name = "dracs-keypair"
-
-# Nombre del proyecto (default: dracs-hybrid)
-project_name = "dracs-hybrid"
-```
-
-### Pasos de despliegue
-
-```bash
-# 1. Navegar al directorio
-cd /home/jsa5214/AWS
-
-# 2. Inicializar Terraform (descargar providers)
-terraform init
-
-# 3. Ver plan de cambios (recomendado antes de apply)
-terraform plan
-
-# 4. Aplicar configuración
-terraform apply
-
-# 5. Ver outputs con IPs y datos importantes
-terraform output
-```
-
-## 📤 Outputs
-
-Tras `terraform apply`, obtendrás:
-
-```bash
-vpc_id                  → ID de la VPC
-public_subnet_id        → ID de subnet pública
-private_subnet_id       → ID de subnet privada
-wireguard_private_ip    → IP privada de WireGuard (10.0.1.10)
-wireguard_eip           → IP Elástica pública de WireGuard
-nginx_private_ip        → IP privada de Nginx (10.0.1.20)
-nginx_eip               → IP Elástica pública de Nginx
-glpi_private_ip         → IP privada de GLPI (10.0.2.10)
-```
-
-## 🔧 Configuración Post-Despliegue
-
-### WireGuard
-1. SSH a WireGuard: `ssh -i key.pem ubuntu@<wireguard_eip>`
-2. Script de setup ejecutado automáticamente: `/home/jsa5214/AWS/user_data/wireguard.sh`
-3. Generar configuración de cliente WireGuard
-4. Distribuir `.conf` a clientes
-
-### Nginx
-1. SSH a Nginx: `ssh -i key.pem ubuntu@<nginx_eip>`
-2. Script de setup ejecutado: `/home/jsa5214/AWS/user_data/nginx.sh`
-3. Configurar reverse proxy hacia GLPI privado
-4. SSL certificates para HTTPS
-
-### GLPI
-1. Acceder solo vía SSH desde bastion o VPN
-2. Script de setup ejecutado: `/home/jsa5214/AWS/user_data/glpi.sh`
-3. Configuración de base de datos
-4. Acceso público únicamente a través de Nginx proxy
-
-## ⚠️ Consideraciones Importantes
-
-### Seguridad
-- **SSH abierto a 0.0.0.0/0**: Actualmente habilitado para flexibilidad de desarrollo. Considerar restringir a IPs/VPN en producción.
-- **GLPI en privada**: Datos seguros, pero VPN recomendada para acceso administrativo directo.
-- **Credenciales**: Nunca hardcodear, usar AWS Secrets Manager para credenciales de aplicación.
-
-### Escalabilidad
-- **Instancias t3.micro**: Tipos económicos, no recomendados para producción heavy.
-- **Zona simple AZ**: Sin alta disponibilidad. Expandir a múltiples AZs si es crítico.
-- **Almacenamiento**: Usar EBS snapshots para backup.
-
-### Costos
-- **NAT Gateway**: Cargos por hora + transferencia de datos
-- **EIPs**: Sin costos si están asociadas a instancias, pero cobran si están libres
-- **t3.micro**: Dentro del free tier de AWS (primer año)
-
-## 📊 Monitoreo Recomendado (WIP)
-
-- [ ] VPC Flow Logs (análisis de tráfico)
-- [ ] CloudWatch Alarms (alertas de CPU, red)
-- [ ] CloudTrail (auditoría de cambios)
-- [ ] Route53 Privado (DNS interno)
-- [ ] EBS Snapshots automáticos (backup GLPI)
-
-## 📚 Archivos del Proyecto
+## Archivos del proyecto
 
 ```
 .
-├── provider.tf          → Configuración del provider AWS
-├── network.tf           → VPC, subnets, NAT Gateway, rutas
-├── security.tf          → Security Groups
-├── instances.tf         → Instancias EC2 y EIPs
-├── variables.tf         → Variables configurables
-├── outputs.tf           → Outputs para consultar post-deploy
-├── README.md            → Este archivo
+├── provider.tf         → AWS provider + backend S3 (comentado hasta bootstrap)
+├── variables.tf        → region, key_name, ami_id, glpi_db_password
+├── network.tf          → VPC, 4 subnets (2 AZs), NAT, IGW, rutas on-prem
+├── security.tf         → 6 security groups
+├── instances.tf        → WireGuard + Nginx EC2; selección de AMI (local.ami)
+├── glpi_scaling.tf     → EFS, RDS, ALB, NLB, Launch Template, ASG
+├── backend.tf          → S3 (tfstate) + DynamoDB (lock)
+├── backups.tf          → S3 (backups app) + AMI snapshots WireGuard/Nginx
+├── outputs.tf          → IPs, DNS, endpoints
 └── user_data/
-    ├── wireguard.sh     → Script de configuración WireGuard
-    ├── nginx.sh         → Script de configuración Nginx
-    └── glpi.sh          → Script de configuración GLPI
+    ├── wireguard.sh        → Instala y configura WireGuard + iptables
+    ├── nginx.sh.tpl        → Nginx → proxy al ALB (DNS inyectado por Terraform)
+    └── glpi_asg.sh.tpl     → GLPI contra RDS + monta EFS (para ASG)
 ```
 
-## 🐛 Troubleshooting
+## Variables
 
-### "No puedo acceder a GLPI desde Nginx"
-1. Verificar security group de GLPI permite tráfico desde Nginx SG
-2. Comprobar que GLPI está escuchando en puerto correcto
-3. Ver logs: `journalctl -u glpi` en GLPI
+| Variable | Default | Descripción |
+|----------|---------|-------------|
+| `region` | `us-east-1` | Región AWS |
+| `key_name` | `dracs-keypair` | Key pair EC2 (debe existir en la cuenta) |
+| `ami_id` | `""` | AMI custom para migración entre cuentas. Vacío = Ubuntu 24.04 LTS latest |
+| `glpi_db_password` | *(requerida)* | Contraseña de la BD RDS de GLPI |
+| `create_ami_backup` | `false` | Crear AMI snapshots de WireGuard y Nginx |
 
-### "WireGuard no conecta"
-1. Verificar puerto 51820/UDP abierto: `sudo iptables -L`
-2. Revisar configuración en `/etc/wireguard/`
-3. Check firewall AWS en security group
+### Gestionar la contraseña sin pasarla en CLI
 
-### "Nginx resuelve mal a GLPI"
-1. Por ahora IP hardcodeada. Implementar Route53 Privado para DNS interno.
-2. Verificar `/etc/nginx/conf.d/` con la IP correcta
+```bash
+# Crear terraform.tfvars (ya ignorado por .gitignore, no se sube al repo)
+cat > terraform.tfvars << 'EOF'
+glpi_db_password = "TuPasswordSegura"
+EOF
 
-## 🎯 Roadmap
+# O via variable de entorno
+export TF_VAR_glpi_db_password="TuPasswordSegura"
+```
 
-- [ ] Backend Terraform remoto (S3 + DynamoDB)
-- [ ] Migrar IPs a variables parametrizadas
+## Despliegue
+
+### Requisitos previos
+- Key pair `dracs-keypair` creado en la cuenta AWS de destino
+- AWS CLI configurado (`aws configure` o variables de entorno)
+- Terraform >= 1.5.0
+
+### Primer despliegue (cuenta nueva)
+
+```bash
+# 1. Crear terraform.tfvars con la contraseña
+echo 'glpi_db_password = "TuPassword"' > terraform.tfvars
+
+# 2. Inicializar providers
+terraform init
+
+# 3. Ver plan (opcional pero recomendado)
+terraform plan
+
+# 4. Aplicar — crea toda la infraestructura incluidos S3 y DynamoDB
+terraform apply
+
+# 5. Ver outputs con IPs y endpoints
+terraform output
+```
+
+### Migración entre cuentas AWS (con AMI custom)
+
+```bash
+# 1. En la cuenta origen: crear AMIs de WireGuard y Nginx
+terraform apply -var create_ami_backup=true
+
+# 2. Copiar AMIs a la cuenta destino (ver AMI_BACKUP_GUIDE.md)
+
+# 3. En la cuenta destino: desplegar con las AMIs migradas
+echo 'ami_id           = "ami-0xxxxxxxxxxxxxxxxx"' >> terraform.tfvars
+echo 'glpi_db_password = "TuPassword"'             >> terraform.tfvars
+terraform init && terraform apply
+```
+
+### Activar backend remoto (S3 + DynamoDB)
+
+```bash
+# Tras el primer apply (que crea el bucket y la tabla):
+# 1. Ver el nombre del bucket
+terraform output tfstate_bucket
+
+# 2. Descomentar el bloque backend en provider.tf y rellenar el account_id
+# 3. Migrar el state local al bucket
+terraform init -migrate-state
+```
+
+## Outputs principales
+
+```bash
+terraform output nlb_eip        # IP fija → configurar en DuckDNS
+terraform output alb_dns        # DNS del ALB (acceso directo / debugging)
+terraform output rds_endpoint   # Endpoint MariaDB RDS
+terraform output efs_id         # ID del EFS compartido
+terraform output wireguard_ip_publica
+terraform output nginx_ip_publica
+```
+
+## Troubleshooting
+
+### GLPI no responde tras el deploy
+- El ASG tarda ~3-5 min en arrancar la instancia y ejecutar el user_data
+- Verificar: AWS Console → EC2 → Auto Scaling Groups → `asg-glpi-dracs` → Activity
+- Ver logs de cloud-init en la instancia: `tail -f /var/log/cloud-init-output.log`
+
+### ALB health checks failing
+- GLPI necesita unos minutos para inicializarse (RDS + EFS mount + install)
+- Grace period del ASG: 300 segundos
+- Comprobar que el path `/glpi/` devuelve 200 o 302: `curl -I http://<alb_dns>/glpi/`
+
+### Nginx no llega al GLPI (tráfico WireGuard)
+- `nginx -t` en la instancia — verificar que el proxy_pass tiene el DNS del ALB correcto
+- El DNS del ALB se inyecta en el user_data en tiempo de `terraform apply`
+- Si se recreó el ALB tras crear Nginx: re-aplicar Terraform para actualizar el user_data
+
+### WireGuard no conecta tras migrar de cuenta
+- El EIP del WireGuard cambia en cada cuenta → actualizar el Endpoint en OPNsense
+- `terraform output wireguard_ip_publica` → nuevo EIP
+
+## Roadmap
+
+- [x] Backend Terraform remoto (S3 + DynamoDB)
+- [x] ALB + ASG multi-AZ para GLPI
+- [x] RDS MariaDB (BD fuera del ASG)
+- [x] EFS para ficheros compartidos
+- [x] NLB con EIP fija (para DuckDNS)
+- [x] AMI parametrizable para migración entre cuentas
+- [ ] HTTPS en ALB (certificado ACM + dominio DuckDNS verificado)
 - [ ] VPC Flow Logs para observabilidad
 - [ ] Route53 Privado para DNS interno
-- [ ] EBS Snapshots automáticos (GLPI)
-- [ ] Multi-AZ para Alta Disponibilidad
-- [ ] CloudWatch Monitoring y Alarms
-- [ ] IAM Roles para instancias
-
-## 📞 Soporte
-
-Para preguntas o issues del proyecto, revisar:
-- AWS Console → VPC para topology
-- CloudTrail para auditoría
-- Systems Manager Session Manager para acceso sin SSH
+- [ ] CloudWatch Alarms (CPU, RDS connections, ALB 5xx)
+- [ ] IAM Roles para instancias EC2 (acceso S3 sin credenciales hardcoded)
+- [ ] Multi-AZ RDS (alta disponibilidad de la BD)
 
 ---
 
-**Última actualización**: abril 2026  
-**Versión Terraform**: >= 1.5.0  
-**AWS Provider**: ~> 6.0
+**Proyecto**: DRACS — ASIX2, INS Provençana, 2026
+**Terraform**: >= 1.5.0 | **AWS Provider**: ~> 6.0
