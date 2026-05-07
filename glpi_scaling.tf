@@ -50,6 +50,7 @@ resource "aws_db_instance" "glpi" {
   db_subnet_group_name   = aws_db_subnet_group.glpi.name
   vpc_security_group_ids = [aws_security_group.rds.id]
 
+  backup_retention_period = 7
   # Para entorno de laboratorio; en produccion: skip_final_snapshot = false
   skip_final_snapshot = true
   deletion_protection = false
@@ -204,6 +205,9 @@ resource "aws_autoscaling_group" "glpi" {
   # ELB health checks para que el ASG termine instancias que no pasan el ALB check
   health_check_type         = "ELB"
   health_check_grace_period = 300
+
+  # Garantizar que los mount targets EFS existen antes de lanzar instancias
+  depends_on = [aws_efs_mount_target.glpi_a, aws_efs_mount_target.glpi_b]
 
   tag {
     key                 = "Name"

@@ -37,13 +37,17 @@ mount -t nfs4 -o nfsvers=4.1,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=
 
 # Persistir el mount entre reinicios
 echo "$EFS_DNS:/ /var/www/html/glpi/files nfs4 nfsvers=4.1,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2,_netdev 0 0" >> /etc/fstab
+
+# El mount resetea la propiedad del directorio; restaurar para que Apache escriba
+chown www-data:www-data /var/www/html/glpi/files
 echo "[✓] EFS montado en /var/www/html/glpi/files"
 
 # Paso 3: Descargar e instalar GLPI si no existe ya
 if [ ! -f /var/www/html/glpi/index.php ]; then
   echo "[$(date)] Descargando GLPI $GLPI_VERSION..."
   cd /tmp
-  wget -q "https://github.com/glpi-project/glpi/releases/download/$GLPI_VERSION/glpi-$GLPI_VERSION.tgz"
+  wget -q --timeout=60 --tries=3 \
+    "https://github.com/glpi-project/glpi/releases/download/$GLPI_VERSION/glpi-$GLPI_VERSION.tgz"
   tar -xzf "glpi-$GLPI_VERSION.tgz" -C /var/www/html/
   chown -R www-data:www-data /var/www/html/glpi
   chmod -R 755 /var/www/html/glpi
