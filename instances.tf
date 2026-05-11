@@ -1,15 +1,10 @@
-# ---------- AMI SELECTION ----------
-# Si se proporciona ami_id, se usa esa (migracion entre cuentas).
-# Si no, se usa la ultima Ubuntu 24.04 LTS (comportamiento por defecto).
-
-locals {
-  ami = var.ami_id != "" ? var.ami_id : data.aws_ami.ubuntu.id
-}
-
 # ---------- EC2 INSTANCES ----------
+# AMI por maquina: si se pasa una AMI custom (migracion), se usa esa; si no,
+# Ubuntu 24.04 LTS latest. Las instancias del ASG GLPI van con Ubuntu vanilla
+# (su user_data instala GLPI contra RDS+EFS), por eso no hay glpi_ami_id aqui.
 
 resource "aws_instance" "wireguard" {
-  ami                    = local.ami
+  ami                    = var.wireguard_ami_id != "" ? var.wireguard_ami_id : data.aws_ami.ubuntu.id
   instance_type          = "t3.micro"
   key_name               = var.key_name
   subnet_id              = aws_subnet.public.id
@@ -25,7 +20,7 @@ resource "aws_instance" "wireguard" {
   })
 
   root_block_device {
-    volume_size = 20
+    volume_size = 30
     encrypted   = true
   }
 
@@ -33,7 +28,7 @@ resource "aws_instance" "wireguard" {
 }
 
 resource "aws_instance" "nginx" {
-  ami                    = local.ami
+  ami                    = var.nginx_ami_id != "" ? var.nginx_ami_id : data.aws_ami.ubuntu.id
   instance_type          = "t3.micro"
   key_name               = var.key_name
   subnet_id              = aws_subnet.public.id
@@ -46,7 +41,7 @@ resource "aws_instance" "nginx" {
   })
 
   root_block_device {
-    volume_size = 20
+    volume_size = 30
     encrypted   = true
   }
 

@@ -76,7 +76,7 @@ resource "aws_lb_target_group" "glpi" {
   vpc_id   = aws_vpc.main.id
 
   health_check {
-    path                = "/glpi/"
+    path                = "/"
     matcher             = "200-302"
     healthy_threshold   = 2
     unhealthy_threshold = 3
@@ -91,6 +91,34 @@ resource "aws_lb_listener" "alb_http" {
   load_balancer_arn = aws_lb.alb.arn
   port              = 80
   protocol          = "HTTP"
+
+  # Redirige todo HTTP a HTTPS (cert ACM en listener 443).
+  default_action {
+    type = "redirect"
+    redirect {
+      port        = "443"
+      protocol    = "HTTPS"
+      status_code = "HTTP_301"
+    }
+  }
+}
+
+# Certificado importado por certbot (DNS-01 vía DuckDNS); se renueva cada 90d
+# y se re-importa a ACM. `most_recent = true` recoge la versión más fresca.
+data "aws_acm_certificate" "glpi" {
+  domain      = "dracs-glpi.duckdns.org"
+  most_recent = true
+  statuses    = ["ISSUED"]
+  # Certbot emite cert ECDSA por defecto; el filtro por defecto del data source es RSA.
+  key_types = ["EC_prime256v1", "EC_secp384r1", "RSA_2048"]
+}
+
+resource "aws_lb_listener" "alb_https" {
+  load_balancer_arn = aws_lb.alb.arn
+  port              = 443
+  protocol          = "HTTPS"
+  ssl_policy        = "ELBSecurityPolicy-TLS13-1-2-2021-06"
+  certificate_arn   = data.aws_acm_certificate.glpi.arn
 
   default_action {
     type             = "forward"
@@ -131,9 +159,9 @@ resource "aws_lb_target_group" "nlb_to_alb" {
 
   health_check {
     protocol            = "HTTP"
-    path                = "/glpi/"
+    path                = "/"
     matcher             = "200-302"
-    healthy_threshold   = 3
+    healthy_threshold   = 2
     unhealthy_threshold = 3
     interval            = 30
   }
@@ -145,6 +173,9 @@ resource "aws_lb_target_group_attachment" "nlb_to_alb" {
   target_group_arn = aws_lb_target_group.nlb_to_alb.arn
   target_id        = aws_lb.alb.arn
   port             = 80
+
+  # NLB->ALB requiere que el ALB tenga listener en el puerto antes de registrar
+  depends_on = [aws_lb_listener.alb_http]
 }
 
 resource "aws_lb_listener" "nlb_http" {
@@ -158,15 +189,59 @@ resource "aws_lb_listener" "nlb_http" {
   }
 }
 
+# NLB TCP:443 → ALB:443 (TLS termina en ALB)
+resource "aws_lb_target_group" "nlb_to_alb_443" {
+  name        = "nlb-to-alb-443-dracs"
+  port        = 443
+  protocol    = "TCP"
+  target_type = "alb"
+  vpc_id      = aws_vpc.main.id
+
+  health_check {
+    protocol            = "HTTPS"
+    path                = "/"
+    matcher             = "200-302"
+    healthy_threshold   = 2
+    unhealthy_threshold = 3
+    interval            = 30
+  }
+
+  tags = { Name = "nlb-to-alb-443-dracs" }
+}
+
+resource "aws_lb_target_group_attachment" "nlb_to_alb_443" {
+  target_group_arn = aws_lb_target_group.nlb_to_alb_443.arn
+  target_id        = aws_lb.alb.arn
+  port             = 443
+  depends_on       = [aws_lb_listener.alb_https]
+}
+
+resource "aws_lb_listener" "nlb_https" {
+  load_balancer_arn = aws_lb.nlb.arn
+  port              = 443
+  protocol          = "TCP"
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.nlb_to_alb_443.arn
+  }
+}
+
 # ---------- LAUNCH TEMPLATE + ASG ----------
 
 resource "aws_launch_template" "glpi" {
   name_prefix   = "lt-glpi-dracs-"
-  image_id      = local.ami
+  image_id      = data.aws_ami.ubuntu.id
   instance_type = "t3.small"
   key_name      = var.key_name
 
   vpc_security_group_ids = [aws_security_group.glpi.id]
+
+  # IAM profile preexistente de AWS Academy: da acceso a SSM Session Manager,
+  # Run Command y CloudWatch Logs. Imprescindible para troubleshooting sin SSH.
+  iam_instance_profile {
+    name = "LabInstanceProfile"
+  }
 
   user_data = base64encode(templatefile("user_data/glpi_asg.sh.tpl", {
     rds_endpoint = aws_db_instance.glpi.address
@@ -185,9 +260,9 @@ resource "aws_launch_template" "glpi" {
 
 resource "aws_autoscaling_group" "glpi" {
   name                = "asg-glpi-dracs"
-  min_size            = 1
+  min_size            = 0
   max_size            = 3
-  desired_capacity    = 1
+  desired_capacity    = var.asg_desired
   vpc_zone_identifier = [aws_subnet.private.id, aws_subnet.private_b.id]
 
   target_group_arns = [aws_lb_target_group.glpi.arn]

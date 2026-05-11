@@ -70,6 +70,15 @@ EOF
 chown www-data:www-data /var/www/html/glpi/config/config_db.php
 echo "[✓] config_db.php configurado (BD: $RDS_ENDPOINT)"
 
+# Paso 4b: Recuperar glpicrypt.key desde EFS si existe (poblado durante migracion).
+# Imprescindible cuando se migra una BD GLPI desde otra cuenta/version: GLPI cifra
+# datos sensibles (LDAP, mail, etc.) con esta clave y sin ella db:update aborta.
+if [ -f /var/www/html/glpi/files/_meta/config/glpicrypt.key ]; then
+  cp /var/www/html/glpi/files/_meta/config/glpicrypt.key /var/www/html/glpi/config/glpicrypt.key
+  chown www-data:www-data /var/www/html/glpi/config/glpicrypt.key
+  echo "[✓] glpicrypt.key restaurada desde EFS"
+fi
+
 # Paso 5: Inicializar BD solo si las tablas no existen aun.
 # Lock en EFS (compartido entre instancias del ASG) para evitar race condition
 # si dos instancias arrancan a la vez y ambas intentan db:install.
@@ -92,7 +101,10 @@ if [ "$DB_EXISTS" = "0" ] || [ -z "$DB_EXISTS" ]; then
     --no-interaction
   echo "[✓] BD inicializada"
 else
-  echo "[✓] BD ya existente ($DB_EXISTS tablas), saltando inicializacion"
+  echo "[✓] BD ya existente ($DB_EXISTS tablas); ejecutando db:update por si el schema es de version anterior..."
+  php /var/www/html/glpi/bin/console db:update --no-interaction --force || \
+    echo "[!] db:update fallo o no era necesario, continuando"
+  echo "[✓] Schema BD verificado/actualizado"
 fi
 
 flock -u 9
@@ -101,9 +113,9 @@ flock -u 9
 echo "[$(date)] Configurando Apache VirtualHost..."
 cat > /etc/apache2/sites-available/glpi.conf << 'APACHE_CONF'
 <VirtualHost *:80>
-    DocumentRoot /var/www/html/glpi/public
+    DocumentRoot /var/www/html/glpi
 
-    <Directory /var/www/html/glpi/public>
+    <Directory /var/www/html/glpi>
         Options FollowSymLinks
         AllowOverride All
         Require all granted
