@@ -1,6 +1,6 @@
 # AWS DRACS Hybrid Infrastructure
 
-Infraestructura AWS del proyecto DRACS (ASIX2). Arquitectura híbrida con VPN WireGuard site-to-site hacia un cluster Proxmox on-prem, GLPI como sistema de inventario con alta disponibilidad en 2 AZs, y backend remoto de Terraform en S3.
+Infraestructura AWS del proyecto DRACS (ASIX2). Arquitectura híbrida con VPN WireGuard site-to-site hacia un cluster Proxmox on-prem, GLPI como sistema de inventario con alta disponibilidad en 2 AZs, TLS terminado en ALB con certificado Let's Encrypt, y backend remoto de Terraform en S3.
 
 ## Arquitectura
 
@@ -9,10 +9,12 @@ Infraestructura AWS del proyecto DRACS (ASIX2). Arquitectura híbrida con VPN Wi
                              │
                     ┌────────┴────────┐
                     │  NLB (EIP fija) │  ← DuckDNS apunta aquí
+                    │  TCP:80, TCP:443│
                     └────────┬────────┘
-                             │ TCP:80
+                             │
                     ┌────────┴────────┐
-                    │      ALB        │  HTTP:80, 2 AZs
+                    │      ALB        │  HTTP:80 (redirect→443)
+                    │ HTTPS:443 + ACM │  HTTPS:443 (TLS termina aquí)
                     └────────┬────────┘
                ┌─────────────┴─────────────┐
         AZ a (us-east-1a)          AZ b (us-east-1b)
@@ -36,8 +38,10 @@ Infraestructura AWS del proyecto DRACS (ASIX2). Arquitectura híbrida con VPN Wi
            ↕ WireGuard VPN (10.8.0.0/24)
      OPNsense on-prem (192.168.x.x)
 
-  Trafico interno (Proxmox → GLPI):
-    OPNsense → WireGuard EC2 → Nginx (10.0.1.20) → ALB → GLPI ASG
+  Tráfico desde on-prem:
+    Cliente on-prem → OPNsense → WireGuard tunnel → AWS VPC →
+       (a) Nginx (10.0.1.20) → ALB → GLPI ASG   [si quieres pasar por proxy interno]
+       (b) GLPI ASG directo (SG permite 10.8.0/24 + 192.168.x.x)
 ```
 
 ## Componentes
@@ -46,29 +50,38 @@ Infraestructura AWS del proyecto DRACS (ASIX2). Arquitectura híbrida con VPN Wi
 - EC2 t3.micro, subnet pública, IP fija 10.0.1.10, EIP
 - Túnel site-to-site UDP:51820 con OPNsense on-prem
 - `source_dest_check = false` para actuar como router
-- Script: `user_data/wireguard.sh`
+- IP forwarding + iptables NAT/FORWARD aplicados via user_data
+- Script: `user_data/wireguard.sh.tpl`
 
 ### Nginx — Reverse Proxy interno
 - EC2 t3.micro, subnet pública, IP fija 10.0.1.20, EIP
-- Sirve el tráfico interno (WireGuard/Proxmox) hacia el ALB
-- SSL auto-firmado para HTTPS desde la VPN
-- Script: `user_data/nginx.sh.tpl` (el DNS del ALB se inyecta en tiempo de despliegue)
+- Sirve el tráfico interno (vía VPN) hacia el ALB en HTTPS
+- SSL auto-firmado (sólo se usa desde VPN; el FQDN público usa el cert ACM del ALB)
+- Script: `user_data/nginx.sh.tpl` (el DNS del ALB se inyecta en `terraform apply`)
 
 ### NLB — IP fija para DuckDNS
 - Network Load Balancer con Elastic IP estática
-- DuckDNS apunta a esta IP; el NLB delega al ALB
+- DuckDNS apunta a esta IP; el NLB delega al ALB (TCP:80 y TCP:443)
 - Sin SG propio (NLBs no tienen security groups)
 
-### ALB — Balanceador HTTP
+### ALB — Balanceador HTTP/HTTPS y TLS termination
 - Application Load Balancer internet-facing en 2 AZs
-- Health checks al path `/glpi/` con 30s de intervalo
+- Listener 80 → redirect 301 a 443
+- Listener 443 → cert ACM (Let's Encrypt vía certbot DNS-01 con DuckDNS)
+- Health checks al path `/` con 30s de intervalo
 - Distribuye tráfico entre instancias del ASG
 
 ### GLPI — Auto Scaling Group (2 AZs)
-- Launch Template: t3.small, AMI configurable via variable
-- ASG: min=1, max=3, desired=1 (escala según carga)
+- Launch Template: t3.small, **Ubuntu 24.04 LTS vanilla** (el user_data instala GLPI desde cero)
+- ASG: min=0, max=3, desired=`var.asg_desired` (default 1)
+- IAM profile: `LabInstanceProfile` (AWS Academy) → habilita SSM Session Manager
 - Script: `user_data/glpi_asg.sh.tpl`
-- Instancias **sin estado**: la BD está en RDS y los ficheros en EFS
+- Instancias **sin estado**: BD en RDS, ficheros en EFS
+- El user_data es idempotente y reaplica en cada arranque:
+  - `config_db.php` apuntando a RDS
+  - Restauración de `glpicrypt.key` desde EFS si existe (sin él GLPI no descifra datos sensibles)
+  - `db:install` si BD vacía, `db:update` si schema antiguo
+  - Forzado de `url_base` en BD a `var.glpi_public_url`
 
 ### RDS — MariaDB 10.11
 - db.t3.micro, 20 GB gp3, cifrado en reposo
@@ -79,7 +92,14 @@ Infraestructura AWS del proyecto DRACS (ASIX2). Arquitectura híbrida con VPN Wi
 ### EFS — Almacenamiento compartido
 - Filesystem NFS compartido entre todas las instancias del ASG
 - Montado en `/var/www/html/glpi/files/` (uploads, logs, attachments)
-- Mount targets en `private` (AZ a) y `private_b` (AZ b)
+- También guarda `_meta/config/glpicrypt.key` (clave de cifrado GLPI, necesaria tras migración)
+- Mount targets en ambas subnets privadas
+
+### ACM — Certificado TLS
+- Certificado Let's Encrypt para `dracs-glpi.duckdns.org`
+- Emitido por `certbot` con plugin `dns-duckdns` (DNS-01 challenge)
+- Importado a ACM (`aws_acm_certificate` data source con `most_recent = true`)
+- Renovación cada 90 días: re-emitir + re-importar a ACM (no automatizado)
 
 ## Security Groups
 
@@ -87,8 +107,8 @@ Infraestructura AWS del proyecto DRACS (ASIX2). Arquitectura híbrida con VPN Wi
 |----|---------|--------|
 | `wireguard-dracs` | UDP:51820 (0.0.0.0/0), TCP:22 (VPN 10.8.0.0/24), todo desde VPC (10.0.0.0/16) | Todo |
 | `nginx-dracs` | TCP:80/443 (0.0.0.0/0), TCP:22 (VPN) | Todo |
-| `alb-glpi-dracs` | TCP:80 (0.0.0.0/0), TCP:80 desde nginx SG | Todo |
-| `glpi-dracs` | TCP:80 desde alb SG, todo desde VPN + on-prem | Todo |
+| `alb-glpi-dracs` | TCP:80 y TCP:443 (0.0.0.0/0), TCP:80 desde nginx SG | Todo |
+| `glpi-dracs` | TCP:80 desde alb SG, todo desde VPN + on-prem (10.8.0/24, 192.168.1/24, 192.168.10/24, 192.168.20/24) | Todo |
 | `rds-glpi-dracs` | TCP:3306 desde glpi SG | Todo |
 | `efs-glpi-dracs` | TCP:2049 desde glpi SG | Todo |
 
@@ -97,18 +117,18 @@ Infraestructura AWS del proyecto DRACS (ASIX2). Arquitectura híbrida con VPN Wi
 ```
 .
 ├── provider.tf         → AWS provider + backend S3 (comentado hasta bootstrap)
-├── variables.tf        → region, key_name, ami_id, glpi_db_password
-├── network.tf          → VPC, 4 subnets (2 AZs), NAT, IGW, rutas on-prem
+├── variables.tf        → región, key_name, AMIs, asg_desired, contraseñas y claves WG
+├── network.tf          → VPC, 4 subnets (2 AZs), NAT, IGW, rutas on-prem via WG ENI
 ├── security.tf         → 6 security groups
-├── instances.tf        → WireGuard + Nginx EC2; selección de AMI (local.ami)
-├── glpi_scaling.tf     → EFS, RDS, ALB, NLB, Launch Template, ASG
+├── instances.tf        → WireGuard + Nginx EC2 (AMIs custom o Ubuntu vanilla)
+├── glpi_scaling.tf     → EFS, RDS, ALB (HTTP+HTTPS), NLB, Launch Template, ASG
 ├── backend.tf          → S3 (tfstate) + DynamoDB (lock)
 ├── backups.tf          → S3 (backups app) + AMI snapshots WireGuard/Nginx
 ├── outputs.tf          → IPs, DNS, endpoints
 └── user_data/
-    ├── wireguard.sh        → Instala y configura WireGuard + iptables
-    ├── nginx.sh.tpl        → Nginx → proxy al ALB (DNS inyectado por Terraform)
-    └── glpi_asg.sh.tpl     → GLPI contra RDS + monta EFS (para ASG)
+    ├── wireguard.sh.tpl   → Instala WireGuard, IP forwarding, iptables NAT
+    ├── nginx.sh.tpl       → Nginx → proxy HTTPS al ALB (DNS inyectado por Terraform)
+    └── glpi_asg.sh.tpl    → GLPI contra RDS + EFS, restaura glpicrypt.key, fuerza url_base
 ```
 
 ## Variables
@@ -116,92 +136,92 @@ Infraestructura AWS del proyecto DRACS (ASIX2). Arquitectura híbrida con VPN Wi
 | Variable | Default | Descripción |
 |----------|---------|-------------|
 | `region` | `us-east-1` | Región AWS |
-| `key_name` | `dracs-keypair` | Key pair EC2 (debe existir en la cuenta) |
-| `ami_id` | `""` | AMI custom para migración entre cuentas. Vacío = Ubuntu 24.04 LTS latest |
+| `key_name` | `dracs-keypair` | Key pair EC2 (debe existir en la cuenta). En la cuenta nueva usamos `dracs2` vía tfvars |
+| `wireguard_ami_id` | `""` | AMI custom de WireGuard (migración). Vacío = Ubuntu 24.04 LTS latest |
+| `nginx_ami_id` | `""` | AMI custom de Nginx (migración). Vacío = Ubuntu 24.04 LTS latest |
+| `asg_desired` | `1` | Instancias deseadas en el ASG. Bajar a 0 durante migración de datos a RDS+EFS |
+| `glpi_public_url` | `https://dracs-glpi.duckdns.org` | URL pública; se fuerza en `glpi_configs.url_base` cada arranque |
 | `glpi_db_password` | *(requerida)* | Contraseña de la BD RDS de GLPI |
 | `wg_aws_private_key` | *(requerida)* | WireGuard private key del gateway AWS |
 | `wg_opnsense_public_key` | *(requerida)* | WireGuard public key del peer OPNsense |
 | `wg_preshared_key` | *(requerida)* | WireGuard preshared key (PSK) del túnel |
 | `create_ami_backup` | `false` | Crear AMI snapshots de WireGuard y Nginx |
 
-### Gestionar la contraseña sin pasarla en CLI
+### Gestionar secretos sin pasarlos en CLI
 
 ```bash
 # Crear terraform.tfvars (ya ignorado por .gitignore, no se sube al repo)
 cat > terraform.tfvars << 'EOF'
+key_name               = "dracs2"
 glpi_db_password       = "TuPasswordSegura"
 wg_aws_private_key     = "..."
 wg_opnsense_public_key = "..."
 wg_preshared_key       = "..."
 EOF
 
-# O via variables de entorno
+# O vía variables de entorno
 export TF_VAR_glpi_db_password="TuPasswordSegura"
 export TF_VAR_wg_aws_private_key="..."
-export TF_VAR_wg_opnsense_public_key="..."
-export TF_VAR_wg_preshared_key="..."
 ```
 
 ## Despliegue
 
 ### Requisitos previos
-- Key pair `dracs-keypair` creado en la cuenta AWS de destino
-- AWS CLI configurado (`aws configure` o variables de entorno)
+- Key pair creado en la cuenta AWS (nombre referenciado por `var.key_name`)
+- AWS CLI configurado (`aws configure --profile dracs-new` recomendado)
 - Terraform >= 1.5.0
 
 ### Primer despliegue (cuenta nueva)
 
 ```bash
-# 1. Crear terraform.tfvars con la contraseña
-echo 'glpi_db_password = "TuPassword"' > terraform.tfvars
+# 1. Crear terraform.tfvars con los secretos
+$EDITOR terraform.tfvars
 
-# 2. Inicializar providers
-terraform init
+# 2. Inicializar providers (state local hasta que se active el backend remoto)
+AWS_PROFILE=dracs-new terraform init
 
-# 3. Ver plan (opcional pero recomendado)
-terraform plan
+# 3. Plan + apply
+AWS_PROFILE=dracs-new terraform plan
+AWS_PROFILE=dracs-new terraform apply
 
-# 4. Aplicar — crea toda la infraestructura incluidos S3 y DynamoDB
-terraform apply
-
-# 5. Ver outputs con IPs y endpoints
-terraform output
+# 4. Ver outputs (IPs, endpoints)
+AWS_PROFILE=dracs-new terraform output
 ```
 
-### Migración entre cuentas AWS (con AMI custom)
+### Migración entre cuentas AWS
 
-```bash
-# 1. En la cuenta origen: crear AMIs de WireGuard y Nginx
-terraform apply -var create_ami_backup=true
+Procedimiento real seguido para migrar de `947411159788` a `123561366922`:
 
-# 2. Copiar AMIs a la cuenta destino (ver AMI_BACKUP_GUIDE.md)
-
-# 3. En la cuenta destino: desplegar con las AMIs migradas
-echo 'ami_id           = "ami-0xxxxxxxxxxxxxxxxx"' >> terraform.tfvars
-echo 'glpi_db_password = "TuPassword"'             >> terraform.tfvars
-terraform init && terraform apply
-```
+1. **En cuenta origen**: AMIs custom de WG y Nginx (snapshot del estado configurado) y AMI de GLPI (sólo para extraer los datos).
+2. **Compartir AMIs+snapshots** a la cuenta destino. Si están cifradas, usar CMK (KMS) con key policy que permita a la cuenta destino.
+3. **En cuenta destino**:
+   - `terraform.tfvars` con `wireguard_ami_id` y `nginx_ami_id` apuntando a las AMIs compartidas, `asg_desired = 0`.
+   - `terraform apply` — crea todo excepto instancias GLPI.
+   - **Migrar datos GLPI**: instancia temporal desde la AMI de GLPI compartida → `mysqldump` a RDS, `rsync /var/www/html/glpi/files/` a EFS, copia de `glpicrypt.key` a EFS (`_meta/config/`). Auto-terminate.
+   - Subir `asg_desired` a 1.
+4. **DuckDNS**: actualizar IP al nuevo NLB EIP.
+5. **OPNsense**: actualizar Endpoint del peer WireGuard al nuevo EIP de WG EC2. Las claves WG no cambian.
+6. **Renovar cert**: `certbot --dns-duckdns -d dracs-glpi.duckdns.org` y re-importar a ACM (el data source coge la versión más reciente automáticamente).
 
 ### Activar backend remoto (S3 + DynamoDB)
 
 ```bash
 # Tras el primer apply (que crea el bucket y la tabla):
-# 1. Ver el nombre del bucket
-terraform output tfstate_bucket
+AWS_PROFILE=dracs-new terraform output tfstate_bucket
 
-# 2. Descomentar el bloque backend en provider.tf y rellenar el account_id
-# 3. Migrar el state local al bucket
-terraform init -migrate-state
+# Editar provider.tf: descomentar bloque backend "s3" y poner el account_id
+# Migrar state local al bucket:
+AWS_PROFILE=dracs-new terraform init -migrate-state
 ```
 
 ## Outputs principales
 
 ```bash
-terraform output nlb_eip        # IP fija → configurar en DuckDNS
-terraform output alb_dns        # DNS del ALB (acceso directo / debugging)
-terraform output rds_endpoint   # Endpoint MariaDB RDS
-terraform output efs_id         # ID del EFS compartido
-terraform output wireguard_ip_publica
+terraform output nlb_eip               # IP fija → DuckDNS
+terraform output alb_dns               # DNS ALB (debugging/HTTPS directo)
+terraform output rds_endpoint          # Endpoint MariaDB
+terraform output efs_id                # ID del EFS compartido
+terraform output wireguard_ip_publica  # EIP WG → OPNsense peer endpoint
 terraform output nginx_ip_publica
 ```
 
@@ -209,22 +229,33 @@ terraform output nginx_ip_publica
 
 ### GLPI no responde tras el deploy
 - El ASG tarda ~3-5 min en arrancar la instancia y ejecutar el user_data
-- Verificar: AWS Console → EC2 → Auto Scaling Groups → `asg-glpi-dracs` → Activity
-- Ver logs de cloud-init en la instancia: `tail -f /var/log/cloud-init-output.log`
+- Console → EC2 → Auto Scaling Groups → `asg-glpi-dracs` → Activity
+- Logs vía SSM: `aws ssm start-session --target <instance-id>` → `tail -f /var/log/cloud-init-output.log`
 
 ### ALB health checks failing
 - GLPI necesita unos minutos para inicializarse (RDS + EFS mount + install)
 - Grace period del ASG: 300 segundos
-- Comprobar que el path `/glpi/` devuelve 200 o 302: `curl -I http://<alb_dns>/glpi/`
+- Comprobar: `curl -I https://dracs-glpi.duckdns.org/` (200/302 esperado)
 
-### Nginx no llega al GLPI (tráfico WireGuard)
-- `nginx -t` en la instancia — verificar que el proxy_pass tiene el DNS del ALB correcto
-- El DNS del ALB se inyecta en el user_data en tiempo de `terraform apply`
-- Si se recreó el ALB tras crear Nginx: re-aplicar Terraform para actualizar el user_data
+### Después de login GLPI redirige a /glpi y da 404
+- El `url_base` en BD aún tiene el path antiguo. El user_data lo arregla en cada boot, pero si se acaba de importar un dump puede pasar.
+- Manual: `UPDATE glpi_configs SET value = 'https://dracs-glpi.duckdns.org' WHERE name = 'url_base';`
+
+### Asset CSS no carga (página sin estilos)
+- Apache vhost debe tener `DocumentRoot /var/www/html/glpi` (modo legacy GLPI 10), NO `/var/www/html/glpi/public`. GLPI 10.0.x hardcodea `public/lib/...` en las URLs
+
+### Auth LDAP/AD falla
+- Verificar conectividad TCP 389 desde GLPI ASG al DC: SSM al GLPI y `bash -c "</dev/tcp/192.168.10.10/389"`
+- Si ICMP llega pero TCP no: firewall del DC (Windows Firewall por origen) probablemente bloquea la subnet privada del ASG. Añadir `10.0.0.0/16` al scope de la regla LDAP/Kerberos
+- Verificar que `glpicrypt.key` está en `/var/www/html/glpi/config/` (sin él GLPI no puede descifrar la pass LDAP)
 
 ### WireGuard no conecta tras migrar de cuenta
-- El EIP del WireGuard cambia en cada cuenta → actualizar el Endpoint en OPNsense
-- `terraform output wireguard_ip_publica` → nuevo EIP
+- El EIP de WG cambia → actualizar el Endpoint en OPNsense
+- `terraform output wireguard_ip_publica` da el nuevo EIP
+- Las claves WG no cambian (están en `terraform.tfvars`)
+
+### "El handshake aparece en OPNsense pero AWS no recibe nada"
+- Probable: OPNsense aún apunta a la EIP de la cuenta vieja. Verificar en OPNsense → VPN → WireGuard → Peers → AWS → Endpoint
 
 ## Roadmap
 
@@ -233,12 +264,12 @@ terraform output nginx_ip_publica
 - [x] RDS MariaDB (BD fuera del ASG)
 - [x] EFS para ficheros compartidos
 - [x] NLB con EIP fija (para DuckDNS)
-- [x] AMI parametrizable para migración entre cuentas
-- [ ] HTTPS en ALB (certificado ACM + dominio DuckDNS verificado)
+- [x] AMI parametrizable para migración entre cuentas (WG y Nginx)
+- [x] HTTPS en ALB (cert Let's Encrypt vía certbot + DuckDNS + ACM)
+- [ ] Renovación automatizada del cert TLS (cron + persistencia en EFS + re-import a ACM)
 - [ ] VPC Flow Logs para observabilidad
 - [ ] Route53 Privado para DNS interno
 - [ ] CloudWatch Alarms (CPU, RDS connections, ALB 5xx)
-- [ ] IAM Roles para instancias EC2 (acceso S3 sin credenciales hardcoded)
 - [ ] Multi-AZ RDS (alta disponibilidad de la BD)
 
 ---

@@ -39,7 +39,13 @@ On-prem (OPNsense) ←─WireGuard site-to-site─→ EC2 WireGuard (10.0.1.10)
 |---|---|---|
 | WireGuard | 10.0.1.10 | pública-a |
 | Nginx | 10.0.1.20 | pública-a |
-| GLPI (ASG, actual) | 10.0.4.131 | privada-b |
+| GLPI (ASG) | dinámica en 10.0.2.0/24 o 10.0.4.0/24 | privada-a / privada-b |
+
+> Las instancias del ASG GLPI no tienen IP fija; se obtienen con:
+> ```
+> aws autoscaling describe-auto-scaling-groups --auto-scaling-group-names asg-glpi-dracs \
+>   --query 'AutoScalingGroups[0].Instances[*].InstanceId' --output text
+> ```
 
 ---
 
@@ -70,7 +76,7 @@ Interfaz VPN (WireGuard):
 ```bash
 # Shell directo
 aws ssm start-session --target i-0bc21dfec3bfa79eb --region us-east-1  # WireGuard
-aws ssm start-session --target i-08bc1c7d44b3319bc --region us-east-1  # GLPI
+aws ssm start-session --target $(aws autoscaling describe-auto-scaling-groups --auto-scaling-group-names asg-glpi-dracs --query 'AutoScalingGroups[0].Instances[0].InstanceId' --output text) --region us-east-1  # GLPI (ID dinámico)
 
 # SSH via SSM (requiere session-manager-plugin instalado)
 ssh wireguard-dracs
@@ -104,7 +110,7 @@ ssh-add ~/.ssh/dracs2.pem
 ssh glpi-dracs-jump
 
 # O en una sola línea sin config:
-ssh -A -J ubuntu@34.205.176.217 -i ~/.ssh/dracs2.pem ubuntu@10.0.4.131
+ssh -A -J ubuntu@34.205.176.217 -i ~/.ssh/dracs2.pem ubuntu@<ip-privada-glpi>
 ```
 
 **Por qué falla sin `-A` (o sin `AddKeysToAgent`):**
@@ -128,7 +134,7 @@ Con esto basta con `ssh glpi-dracs-jump` y SSH gestiona los dos saltos solo.
 
 ```bash
 # GLPI acepta SSH desde 192.168.x.x (on-prem) si VPN está up
-ssh -i ~/.ssh/dracs2.pem ubuntu@10.0.4.131
+ssh -i ~/.ssh/dracs2.pem ubuntu@<ip-privada-glpi>
 
 # Nginx y WireGuard solo desde 10.8.0.0/24 (el propio OPNsense)
 ```
@@ -189,14 +195,17 @@ El DC estaba registrado en GLPI con las credenciales LDAP, pero GLPI cifra la co
    # Si no hay handshake: actualizar Endpoint en OPNsense → 34.204.119.208:51820
    ```
 
-2. **AllowedIPs en OPNsense (CRÍTICO)** — GLPI está ahora en `10.0.4.x` (subnet privada), antes estaba en `10.0.1.x`. El peer AWS en OPNsense debe tener `10.0.0.0/16` (o al menos `10.0.4.0/24`) en AllowedIPs. Sin esto, el DC recibe la petición LDAP pero no puede enrutar la respuesta a `10.0.4.131` por el túnel → falla silenciosamente.
+2. **AllowedIPs en OPNsense (CRÍTICO)** — el ASG GLPI vive en `10.0.2.0/24` y `10.0.4.0/24`. El peer AWS en OPNsense debe tener `10.0.0.0/16` en AllowedIPs (cubre ambas subnets privadas). Sin esto, el DC recibe la petición LDAP pero no puede enrutar la respuesta por el túnel → falla silenciosamente.
 
 3. **Verificar conectividad GLPI → DC desde la instancia:**
    ```bash
-   aws ssm start-session --target i-08bc1c7d44b3319bc --region us-east-1
-   nc -zv 192.168.10.10 389    # LDAP
-   nc -zv 192.168.10.10 88     # Kerberos (si usa autenticación integrada)
+   GLPI=$(aws autoscaling describe-auto-scaling-groups --auto-scaling-group-names asg-glpi-dracs --query 'AutoScalingGroups[0].Instances[0].InstanceId' --output text)
+   aws ssm start-session --target $GLPI --region us-east-1
+   # Una vez dentro:
+   (timeout 2 bash -c "</dev/tcp/192.168.10.10/389") && echo "LDAP OPEN" || echo "LDAP CLOSED"
+   (timeout 2 bash -c "</dev/tcp/192.168.10.10/88")  && echo "KRB OPEN"  || echo "KRB CLOSED"
    ```
+   Si ICMP llega pero TCP no: revisar Windows Firewall en el DC → ampliar scope a `10.0.0.0/16` para las reglas inbound LDAP/Kerberos.
 
 4. **glpicrypt.key** — ya verificado, está en ambos sitios:
    - EFS: `/var/www/html/glpi/files/_meta/config/glpicrypt.key` ✓
@@ -245,7 +254,7 @@ Fichero `terraform.tfvars` está gitignored. Variables necesarias:
 | NLB | nlb-glpi-dracs |
 | EC2 WireGuard | i-0bc21dfec3bfa79eb |
 | EC2 Nginx | i-0826d318ae07dfe40 |
-| EC2 GLPI (ASG, actual) | i-08bc1c7d44b3319bc |
+| EC2 GLPI | dinámico (ASG); recupera con `aws autoscaling describe-auto-scaling-groups --auto-scaling-group-names asg-glpi-dracs` |
 
 ---
 
@@ -262,8 +271,10 @@ aws elbv2 describe-target-health --region us-east-1 \
   --target-group-arn arn:aws:elasticloadbalancing:us-east-1:123561366922:targetgroup/tg-glpi-dracs/8f84735419d18c83 \
   --output table
 
-# Shell en GLPI sin SSH ni VPN
-aws ssm start-session --target i-08bc1c7d44b3319bc --region us-east-1
+# Shell en GLPI sin SSH ni VPN (ID dinámico del ASG)
+aws ssm start-session --region us-east-1 --target \
+  $(aws autoscaling describe-auto-scaling-groups --auto-scaling-group-names asg-glpi-dracs \
+    --query 'AutoScalingGroups[0].Instances[0].InstanceId' --output text)
 
 # Shell en WireGuard sin SSH ni VPN
 aws ssm start-session --target i-0bc21dfec3bfa79eb --region us-east-1

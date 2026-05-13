@@ -1,0 +1,249 @@
+# Runbook AWS
+
+Este documento recoge los procedimientos operativos recurrentes sobre la infraestructura AWS y el troubleshooting de los problemas concretos encontrados durante el despliegue y la migración. Está pensado para consultarse cuando hace falta hacer una operación de mantenimiento o cuando algo falla, no para leerlo de principio a fin.
+
+# 1. Conectar a una instancia (SSM Session Manager)
+
+---
+
+La forma estándar de obtener shell en cualquier instancia es **SSM Session Manager**, sin SSH ni VPN. Requiere que la instancia tenga `LabInstanceProfile` adjunto (el ASG ya lo lleva por defecto desde el Launch Template).
+
+```bash
+# Listar instancias y su ID
+aws ec2 describe-instances --profile dracs-new --region us-east-1 \
+  --query 'Reservations[*].Instances[*].{Name:Tags[?Key==`Name`]|[0].Value,Id:InstanceId}' \
+  --output table
+
+# Conectar
+aws ssm start-session --profile dracs-new --region us-east-1 --target i-XXXXXXXX
+```
+
+Para la instancia del ASG (ID dinámico):
+
+```bash
+GLPI=$(aws autoscaling describe-auto-scaling-groups \
+  --auto-scaling-group-names asg-glpi-dracs \
+  --query 'AutoScalingGroups[0].Instances[0].InstanceId' --output text)
+aws ssm start-session --target $GLPI
+```
+
+> **Nota:** si el comando dice `TargetNotConnected`, la instancia es nueva y SSM agent aún no ha registrado, o le falta el IAM profile. Esperar ~30s tras el boot, o ver el punto siguiente.
+
+# 2. SSM no llega a una instancia recién modificada
+
+---
+
+Si se adjunta `LabInstanceProfile` a una instancia **ya corriendo**, el SSM agent no toma las credenciales nuevas hasta que se reinicia.
+
+**Solución más rápida:**
+
+```bash
+aws ec2 reboot-instances --instance-ids i-XXXXXXXX
+# Esperar ~30s, comprobar:
+aws ssm describe-instance-information \
+  --filters Key=InstanceIds,Values=i-XXXXXXXX \
+  --query 'InstanceInformationList[0].PingStatus'
+# Debe devolver "Online"
+```
+
+Para el ASG es más limpio terminar la instancia y dejar que el grupo lance una nueva (que arrancará ya con el IAM profile del Launch Template).
+
+# 3. Reemplazar la instancia del ASG (para coger user_data nuevo)
+
+---
+
+Las modificaciones del `user_data` solo aplican a **nuevas** instancias. Cambiar el Launch Template no toca las que ya están corriendo. Para forzar el reemplazo:
+
+```bash
+# 1. Aplicar el cambio en Terraform (esto crea una nueva versión del LT)
+AWS_PROFILE=dracs-new terraform apply -auto-approve
+
+# 2. Identificar la instancia actual y terminarla
+GLPI=$(aws autoscaling describe-auto-scaling-groups \
+  --auto-scaling-group-names asg-glpi-dracs \
+  --query 'AutoScalingGroups[0].Instances[0].InstanceId' --output text)
+aws ec2 terminate-instances --instance-ids $GLPI
+
+# 3. El ASG detectará que falta una instancia y lanzará otra con la versión latest del LT
+# Esperar ~3-5 min hasta que esté healthy en el target group del ALB
+```
+
+> **Nota:** durante ese rato GLPI no estará accesible. Si no se puede permitir downtime, subir `asg_desired` a 2 antes (con `-var asg_desired=2`), esperar a la segunda esté healthy, terminar la vieja y volver a bajar a 1.
+
+# 4. Cambiar `desired_capacity` del ASG
+
+---
+
+```bash
+# Bajar a 0 para mantenimiento (apagar GLPI sin destruir nada)
+AWS_PROFILE=dracs-new terraform apply -auto-approve -var asg_desired=0
+
+# Subir a 1 (volver a producción)
+AWS_PROFILE=dracs-new terraform apply -auto-approve -var asg_desired=1
+
+# Escalar temporalmente a 2 o 3
+AWS_PROFILE=dracs-new terraform apply -auto-approve -var asg_desired=2
+```
+
+# 5. Renovar el certificado TLS
+
+---
+
+El cert de Let's Encrypt dura **90 días**. La renovación no está automatizada hoy. Procedimiento manual:
+
+```bash
+# 1. Entrar por SSM a una instancia del ASG (no importa cuál)
+GLPI=$(aws autoscaling describe-auto-scaling-groups \
+  --auto-scaling-group-names asg-glpi-dracs \
+  --query 'AutoScalingGroups[0].Instances[0].InstanceId' --output text)
+aws ssm start-session --target $GLPI
+
+# 2. Dentro de la instancia, reinstalar certbot+plugin en venv si no está
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y certbot python3-venv
+sudo python3 -m venv /opt/cb
+sudo /opt/cb/bin/pip install certbot certbot-dns-duckdns
+
+# 3. Credenciales DuckDNS
+echo "dns_duckdns_token = <TOKEN>" | sudo tee /etc/certbot/duckdns.ini
+sudo chmod 600 /etc/certbot/duckdns.ini
+
+# 4. Re-emitir
+sudo /opt/cb/bin/certbot certonly --non-interactive --agree-tos \
+  --email joelsansi4@gmail.com \
+  --authenticator dns-duckdns \
+  --dns-duckdns-credentials /etc/certbot/duckdns.ini \
+  --dns-duckdns-propagation-seconds 60 \
+  -d dracs-glpi.duckdns.org --cert-name dracs-glpi --force-renewal
+
+# 5. Importar a ACM
+sudo aws acm import-certificate --region us-east-1 \
+  --certificate fileb:///etc/letsencrypt/live/dracs-glpi/cert.pem \
+  --private-key fileb:///etc/letsencrypt/live/dracs-glpi/privkey.pem \
+  --certificate-chain fileb:///etc/letsencrypt/live/dracs-glpi/chain.pem \
+  --tags Key=Name,Value=dracs-glpi-cert
+```
+
+El `data "aws_acm_certificate"` recoge automáticamente la versión `most_recent`, por lo que un `terraform apply` después de la importación actualizará el listener HTTPS del ALB.
+
+```bash
+AWS_PROFILE=dracs-new terraform apply -auto-approve
+```
+
+> **Nota:** las instancias del ASG son efímeras. El `/etc/letsencrypt` no persiste entre reemplazos. Si se quiere automatizar la renovación habría que persistir `/etc/letsencrypt` en EFS y un cron que renueve + re-importe a ACM (no implementado).
+
+# 6. Troubleshooting
+
+---
+
+## 6.1 Tras login, GLPI redirige a `/glpi` y da 404
+
+El `url_base` en la BD está apuntando al path de la cuenta vieja (legacy `/glpi`). El `user_data` lo arregla en cada arranque, pero si se ha re-importado un dump puede volver a aparecer.
+
+**Fix manual** (vía SSM en la instancia GLPI):
+
+```bash
+mysql -h rds-glpi-dracs.capsrvyl1db1.us-east-1.rds.amazonaws.com \
+  -u glpi -p<pass> glpi -e "
+  UPDATE glpi_configs SET value = 'https://dracs-glpi.duckdns.org'
+    WHERE name = 'url_base';
+  UPDATE glpi_configs SET value = 'https://dracs-glpi.duckdns.org/apirest.php/'
+    WHERE name = 'url_base_api';
+"
+cd /var/www/html/glpi && php bin/console cache:clear --no-interaction
+```
+
+## 6.2 GLPI carga sin estilos (CSS roto)
+
+Apache está con `DocumentRoot=/var/www/html/glpi/public` (modo "moderno"), pero GLPI 10.0.x hardcodea `public/lib/...` en las URLs de assets. Volver al modo legacy:
+
+En `user_data/glpi_asg.sh.tpl`:
+
+```apache
+<VirtualHost *:80>
+    DocumentRoot /var/www/html/glpi
+    <Directory /var/www/html/glpi>
+        AllowOverride All
+        Require all granted
+    </Directory>
+    ...
+</VirtualHost>
+```
+
+Aplicar Terraform y reemplazar la instancia (punto 3).
+
+## 6.3 Auth LDAP falla (ICMP llega al DC pero TCP no)
+
+Probable causa: **Windows Firewall** del DC tiene reglas inbound que limitan el origen a una subnet vieja, y la nueva subnet del ASG (10.0.4.x) no está cubierta.
+
+**Diagnóstico desde la instancia GLPI:**
+
+```bash
+ping -c 2 192.168.10.10                                              # debería pasar
+(timeout 2 bash -c "</dev/tcp/192.168.10.10/389") && echo OPEN || echo CLOSED
+```
+
+Si ICMP OK pero LDAP CLOSED → Windows Firewall. Ampliar el scope de las reglas inbound del DC (`wf.msc` → reglas LDAP/Kerberos/SMB → Scope → Remote IP addresses → añadir `10.0.0.0/16`).
+
+## 6.4 AMI cifrada no se puede compartir (`InvalidParameter`)
+
+```
+An error occurred (InvalidParameter): Snapshots encrypted with the AWS Managed CMK can't be shared
+```
+
+La AMI está cifrada con la KMS key gestionada por AWS (`aws/ebs`). Hay que **re-cifrar** el snapshot con una CMK propia:
+
+```bash
+# 1. Crear CMK con key policy que autorice al account ID destino
+# 2. Copiar el snapshot especificando la CMK
+aws ec2 copy-snapshot --region us-east-1 \
+  --source-snapshot-id <orig-snap-id> --source-region us-east-1 \
+  --encrypted --kms-key-id alias/dracs-glpi-share-key
+
+# 3. Registrar una nueva AMI a partir del snapshot re-cifrado
+# 4. Compartir esta nueva AMI con --launch-permission Add=[{UserId=<destino>}]
+```
+
+## 6.5 OPNsense ve handshake pero AWS no recibe nada
+
+Causa más probable: **OPNsense apunta al EIP de la cuenta vieja**. Al migrar de cuenta, el EIP del WG EC2 cambia.
+
+**Diagnóstico:**
+
+```bash
+# Desde AWS (vía SSM al WG EC2)
+sudo wg show wg0 dump
+# Si para el peer ves: endpoint=(none) y handshake=0 → no llega nada
+```
+
+**Fix:** en OPNsense, VPN → WireGuard → Peers → editar el peer "AWS" → poner el Endpoint correcto (`<nuevo-EIP>:51820`) y aplicar.
+
+## 6.6 La VPN está arriba pero Nginx no puede pingear 10.8.0.2
+
+El IP del wg0 (`10.8.0.2`) sólo existe dentro de la EC2 WireGuard. Para que otra EC2 de la VPC pueda alcanzarla habría que añadir una ruta en la VPC `10.8.0.0/24 → ENI del WG`. **No se ha hecho** porque no afecta a la funcionalidad — los servicios on-prem se alcanzan por sus IPs reales (`192.168.x.x`), no por la dirección del túnel.
+
+## 6.7 GLPI dice "Falta el archivo de claves glpicrypt.key"
+
+La instancia del ASG no encontró `/var/www/html/glpi/files/_meta/config/glpicrypt.key` en EFS y el `user_data` no la restauró. Sin esa clave GLPI no descifra contraseñas guardadas y `db:update` aborta.
+
+**Fix:** lanzar un migrator EC2 puntual desde la AMI custom de GLPI vieja que copie la clave a EFS:
+
+```bash
+# user_data del migrator
+mkdir -p /mnt/efs && mount -t nfs4 -o nfsvers=4.1 \
+  fs-XXX.efs.us-east-1.amazonaws.com:/ /mnt/efs
+rsync -av /var/www/html/glpi/config/ /mnt/efs/_meta/config/
+shutdown -h now
+```
+
+Luego reemplazar la instancia ASG (punto 3) para que el `user_data` la coja.
+
+# 7. Documentación relacionada
+
+---
+
+* **AWS.md** — visión general y problemas encontrados (resumen ejecutivo)
+* **AWS-GLPI.md** — detalle de `user_data` idempotente y migrator
+* **AWS-BALANCEO.md** — detalle de cert TLS y listeners
+* **AWS-VPN.md** — gateway WireGuard
+* **AWS-SEGURIDAD.md** — KMS, SGs y secretos
+* **AWS-TERRAFORM.md** — procedimiento completo de migración entre cuentas

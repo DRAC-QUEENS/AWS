@@ -109,6 +109,14 @@ fi
 
 flock -u 9
 
+# Paso 5b: Forzar url_base/url_base_api en BD. Es idempotente y evita que
+# herencia de un dump migrado (donde apuntaba al hostname/path viejo)
+# rompa los redirects post-login con 404 en /glpi.
+mysql -h "$RDS_ENDPOINT" -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" -e "
+  UPDATE glpi_configs SET value = '${glpi_public_url}' WHERE name = 'url_base';
+  UPDATE glpi_configs SET value = '${glpi_public_url}/apirest.php/' WHERE name = 'url_base_api';
+" 2>/dev/null && echo "[✓] url_base fijado a ${glpi_public_url}"
+
 # Paso 6: VirtualHost Apache
 echo "[$(date)] Configurando Apache VirtualHost..."
 cat > /etc/apache2/sites-available/glpi.conf << 'APACHE_CONF'

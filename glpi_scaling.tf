@@ -244,9 +244,10 @@ resource "aws_launch_template" "glpi" {
   }
 
   user_data = base64encode(templatefile("user_data/glpi_asg.sh.tpl", {
-    rds_endpoint = aws_db_instance.glpi.address
-    db_password  = var.glpi_db_password
-    efs_dns      = "${aws_efs_file_system.glpi.id}.efs.${var.region}.amazonaws.com"
+    rds_endpoint    = aws_db_instance.glpi.address
+    db_password     = var.glpi_db_password
+    efs_dns         = "${aws_efs_file_system.glpi.id}.efs.${var.region}.amazonaws.com"
+    glpi_public_url = var.glpi_public_url
   }))
 
   block_device_mappings {

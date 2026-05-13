@@ -22,6 +22,12 @@ variable "asg_desired" {
   default     = 1
 }
 
+variable "glpi_public_url" {
+  description = "URL publica de GLPI. Se fuerza en cada arranque del ASG sobre `url_base` en BD para evitar que herede valores del setup viejo (p.ej. tras importar dump migrado)."
+  type        = string
+  default     = "https://dracs-glpi.duckdns.org"
+}
+
 variable "glpi_db_password" {
   description = "Contrasena de la BD RDS de GLPI"
   type        = string
