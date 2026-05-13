@@ -113,3 +113,4 @@ La documentación de AWS se divide en los siguientes sub-artículos:
 * **AWS-TERRAFORM.md** — estructura del código IaC, variables, state remoto y procedimiento de migración entre cuentas
 * **AWS-RUNBOOK.md** — operativa: SSM, reemplazo de instancia ASG, renovación del cert, escalado y troubleshooting recurrente
 * **AWS-SIMPLE.md** — la arquitectura previa (monolítica, 1 AZ, GLPI standalone) que se desplegó primero y se sustituyó por la actual
+* **AWS-COSTES.md** — estimación de coste mensual de ambas arquitecturas y comparativa

@@ -55,9 +55,9 @@ resource "aws_instance" "glpi" {
   ami                    = local.ami
   instance_type          = "t3.small"
   key_name               = var.key_name
-  subnet_id              = aws_subnet.public.id
+  subnet_id              = aws_subnet.private.id
   vpc_security_group_ids = [aws_security_group.glpi.id]
-  private_ip             = "10.0.1.30"
+  private_ip             = "10.0.2.30"
 
   user_data = templatefile("user_data/glpi.sh.tpl", {
     db_password = var.glpi_db_password

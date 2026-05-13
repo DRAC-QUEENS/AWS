@@ -1,6 +1,6 @@
 # DRACS — Contexto de infraestructura AWS
 
-> Actualizado: 2026-05-12  
+> Actualizado: 2026-05-13  
 > Cuenta activa: **123561366922** (la nueva)  
 > Cuenta antigua desactivada: 947411159788
 
@@ -173,55 +173,19 @@ sudo wg show
 
 ---
 
-## Problema pendiente: GLPI no autentifica via DC
+## Estado de problemas conocidos
 
-**Síntoma:** la autenticación LDAP/AD contra el DC on-prem falla tras migrar a la nueva cuenta y nueva arquitectura.
-
-**Lo que se sabe:**
-- El túnel WireGuard levanta correctamente y hay ping.
-- Antes de la migración (arquitectura simple, cuenta vieja) la auth LDAP funcionaba.
-- El DC responde (puerto 389 verificado en el pasado).
-
-**Hipótesis más probable:**
-El DC estaba registrado en GLPI con las credenciales LDAP, pero GLPI cifra la config sensible (contraseña LDAP, etc.) con `glpicrypt.key`. Si la clave se migró correctamente al EFS, debería funcionar. Si no, GLPI no puede descifrar la contraseña del DC y falla silenciosamente.
-
-**Verificar cuando Proxmox esté operativo:**
-
-1. **Túnel WireGuard** — confirmar handshake activo:
-   ```bash
-   aws ssm start-session --target i-0bc21dfec3bfa79eb --region us-east-1
-   sudo wg show
-   # Debe mostrar: endpoint, latest handshake, transfer para el peer OPNsense
-   # Si no hay handshake: actualizar Endpoint en OPNsense → 34.204.119.208:51820
-   ```
-
-2. **AllowedIPs en OPNsense (CRÍTICO)** — el ASG GLPI vive en `10.0.2.0/24` y `10.0.4.0/24`. El peer AWS en OPNsense debe tener `10.0.0.0/16` en AllowedIPs (cubre ambas subnets privadas). Sin esto, el DC recibe la petición LDAP pero no puede enrutar la respuesta por el túnel → falla silenciosamente.
-
-3. **Verificar conectividad GLPI → DC desde la instancia:**
-   ```bash
-   GLPI=$(aws autoscaling describe-auto-scaling-groups --auto-scaling-group-names asg-glpi-dracs --query 'AutoScalingGroups[0].Instances[0].InstanceId' --output text)
-   aws ssm start-session --target $GLPI --region us-east-1
-   # Una vez dentro:
-   (timeout 2 bash -c "</dev/tcp/192.168.10.10/389") && echo "LDAP OPEN" || echo "LDAP CLOSED"
-   (timeout 2 bash -c "</dev/tcp/192.168.10.10/88")  && echo "KRB OPEN"  || echo "KRB CLOSED"
-   ```
-   Si ICMP llega pero TCP no: revisar Windows Firewall en el DC → ampliar scope a `10.0.0.0/16` para las reglas inbound LDAP/Kerberos.
-
-4. **glpicrypt.key** — ya verificado, está en ambos sitios:
-   - EFS: `/var/www/html/glpi/files/_meta/config/glpicrypt.key` ✓
-   - Config activo: `/var/www/html/glpi/config/glpicrypt.key` ✓
-
-5. **Config LDAP en BD** (ya verificado):
-   - Servidor: `192.168.10.10:389` (DC en red `192.168.10.0/24`) ✓
-   - Bind DN: `CN=Administrador,CN=Users,DC=dracs,DC=local`
-   - TLS: desactivado
-
-**Problema conocido en WireGuard EC2 — regla iptables huérfana:**
-Hay una regla `MASQUERADE` en `eth0` que no debería existir (la interfaz es `ens5`). Es inofensiva pero se acumula con reinicios. Para limpiarla:
-```bash
-sudo iptables -t nat -D POSTROUTING -o eth0 -j MASQUERADE
-sudo iptables-save > /etc/iptables/rules.v4
-```
+| Problema | Estado | Resolución |
+|---|---|---|
+| GLPI auth LDAP/AD falla | ✅ RESUELTO | Windows Firewall del DC bloqueaba TCP/389 desde las subnets nuevas. Se amplió el scope a `10.0.0.0/16` en las reglas inbound del DC. |
+| CSS roto (GLPI sin estilos) | ✅ RESUELTO | `DocumentRoot` cambiado de `/public` a `/var/www/html/glpi` (modo legacy GLPI 10). |
+| 404 tras login (`/glpi`) | ✅ RESUELTO | `url_base` en BD apuntaba a ruta antigua. Se fuerza en cada arranque del ASG via `user_data`. |
+| `glpicrypt.key` no encontrada | ✅ RESUELTO | EC2 migrator segundo pasó a copiar `config/` completo a EFS `/_meta/config/`. El `user_data` la restaura en cada arranque. |
+| WireGuard no establecía handshake | ✅ RESUELTO | OPNsense apuntaba al EIP de la cuenta vieja. Actualizado a `34.204.119.208:51820`. |
+| ACM no encontraba el cert ECDSA | ✅ RESUELTO | `data "aws_acm_certificate"` necesita `key_types = ["EC_prime256v1", "EC_secp384r1", "RSA_2048"]`. |
+| NLB→ALB race condition en `apply` | ✅ RESUELTO | Añadido `depends_on = [aws_lb_listener.alb_http]` al `target_group_attachment`. |
+| Regla iptables huérfana en WG EC2 | ⚠️ INOFENSIVA | Regla `MASQUERADE` en `eth0` (interfaz correcta es `ens5`). Se acumula con reinicios pero no afecta al funcionamiento. Para limpiar: `sudo iptables -t nat -D POSTROUTING -o eth0 -j MASQUERADE` |
+| Cert TLS renovación automatizada | 🔲 PENDIENTE | Let's Encrypt caduca cada 90 días (próxima caducidad ~2026-08-09). Ver `AWS-RUNBOOK.md` sección 5. |
 
 ---
 
@@ -279,3 +243,55 @@ aws ssm start-session --region us-east-1 --target \
 # Shell en WireGuard sin SSH ni VPN
 aws ssm start-session --target i-0bc21dfec3bfa79eb --region us-east-1
 ```
+
+---
+
+## Histórico de trabajo por sesión
+
+### Sprint 2 (antes de 2026-05-12)
+- Desplegada arquitectura simple (`simple/`): 3 EC2 en subnet pública (WireGuard 10.0.1.10, Nginx 10.0.1.20, GLPI 10.0.1.30), VPN WireGuard operativa, autenticación LDAP verificada contra el DC.
+- GLPI accesible en `https://dracs-glpi.duckdns.org` con cert autofirmado en Nginx.
+- Cuenta AWS: **947411159788**.
+
+### Sprint 3 — Migración y nueva arquitectura (2026-05-12)
+**Migración de cuenta 947411159788 → 123561366922:**
+- Código Terraform refactorizado (variables simplificadas, `wireguard_ami_id` / `nginx_ami_id`, `asg_desired`).
+- AMIs de WireGuard y Nginx re-cifradas con CMK `alias/dracs-glpi-share-key` y compartidas con la cuenta destino.
+- Nueva arquitectura desplegada: VPC multi-AZ, 4 subnets, NLB+ALB, ASG GLPI, RDS MariaDB, EFS, NAT Gateway.
+- EC2 migrator temporal: `mysqldump` de MariaDB local → RDS; `rsync /files/` → EFS; copia `glpicrypt.key` y `config/` → EFS `/_meta/config/`.
+- Segundo migrator: `glpicrypt.key` no estaba en el primer rsync → se copió `config/` completo.
+- Cert TLS Let's Encrypt emitido con certbot DNS-01 + plugin `certbot-dns-duckdns`, importado a ACM.
+- GLPI operativo en `https://dracs-glpi.duckdns.org` con TLS válido.
+- Auth LDAP rota → causa: Windows Firewall del DC limitaba el scope a la subnet antigua. Fix: ampliar a `10.0.0.0/16`.
+- GLPI 100% funcional con autenticación AD. Cuenta vieja **947411159788** desactivada.
+
+**Fixes técnicos en el código:**
+- `DocumentRoot` de Apache cambiado a `/var/www/html/glpi` (modo legacy) — GLPI 10.0.x hardcodea `public/` en URLs de assets.
+- `depends_on = [aws_lb_listener.alb_http]` en NLB→ALB attachment (race condition en `terraform apply`).
+- `key_types = ["EC_prime256v1", "EC_secp384r1", "RSA_2048"]` en `data "aws_acm_certificate"`.
+- `user_data` fuerza `url_base` en BD en cada arranque (evita redireccionamiento a `/glpi` post-migración).
+
+### Documentación (2026-05-13)
+Generados 10 documentos en `docs/aws/` siguiendo el estilo de documentación del proyecto (tono narrativo, tablas, `> Nota:`, sección "Documentación relacionada"):
+
+| Fichero | Contenido |
+|---|---|
+| `AWS.md` | Visión general, diagrama ASCII, decisiones de diseño, problemas encontrados |
+| `AWS-RED.md` | VPC, subnets, IGW, NAT, route tables, rutas on-prem |
+| `AWS-VPN.md` | EC2 WireGuard + EC2 Nginx, user_data, iptables |
+| `AWS-BALANCEO.md` | NLB, ALB, target groups, cert TLS (certbot+ACM+DuckDNS) |
+| `AWS-GLPI.md` | Launch Template, user_data idempotente, ASG, RDS, EFS, migrator |
+| `AWS-SEGURIDAD.md` | Security Groups (6), IAM, KMS CMK, secretos |
+| `AWS-TERRAFORM.md` | Estructura IaC, variables, backend S3+DynamoDB, migración entre cuentas |
+| `AWS-RUNBOOK.md` | SSM, reemplazo ASG, renovación cert, escalado, troubleshooting |
+| `AWS-SIMPLE.md` | Arquitectura previa Sprint 2 (monolítica), comparativa con la actual |
+| `AWS-COSTES.md` | Estimación mensual arquitectura simple (~69 $) vs actual (~98 $), comparativa, alarmas |
+
+**Diagrama de arquitectura:**
+- Script `docs/aws/generar_diagrama.py` (Python `diagrams` library) genera `aws-arquitectura.png` con iconografía AWS oficial.
+- Ejecutar: `python3 docs/aws/generar_diagrama.py` (requiere `pip install diagrams` + `graphviz`).
+
+**Correcciones en `simple/`:**
+- Añadida `subnet-privada-dracs` (10.0.2.0/24) — el GLPI estaba en la pública por error.
+- EC2 GLPI movida a subnet privada (`10.0.2.30`).
+- NAT Gateway y route table privada añadidos al Terraform (justificación: GLPI privado necesita NAT para salir a internet en el arranque).

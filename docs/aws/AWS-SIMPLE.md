@@ -28,28 +28,27 @@ Al ir bien de tiempo en el Sprint 3, se decidió subir el listón y rehacer la p
                     │ EIP Nginx (DuckDNS)│
                     └─────────┬──────────┘
                               │ HTTPS:443
-                    ┌─────────┴──────────┐
-                    │   Nginx (proxy)    │  10.0.1.20
-                    └─────────┬──────────┘
-                              │ HTTP:80 (privado)
-                    ┌─────────┴──────────┐
-                    │ GLPI todo-en-uno   │  10.0.1.30
-                    │  Apache + PHP      │
-                    │  MariaDB local     │
-                    │  ficheros locales  │
-                    └────────────────────┘
+  PUBLIC 10.0.1.0/24          │
+  ┌──────────────────────────────────────┐
+  │  WireGuard EC2  │  Nginx (proxy)    │
+  │  10.0.1.10 EIP  │  10.0.1.20 EIP   │
+  │                 │                   │
+  │   NAT Gateway ──┘                   │
+  └──────────┬──────────────────────────┘
+             │ HTTP:80 (privado)
+  PRIVATE 10.0.2.0/24
+  ┌──────────┴──────────┐
+  │  GLPI todo-en-uno   │  10.0.2.30
+  │   Apache + PHP      │
+  │   MariaDB local     │
+  │   ficheros locales  │
+  └─────────────────────┘
 
-      ┌──────────────────────┐
-      │ WireGuard EC2        │  10.0.1.10
-      │ (gateway VPN)        │  EIP pública
-      └──────────┬───────────┘
-                 │
-            ↕ Túnel WireGuard
-                 │
-            OPNsense on-prem
+      ↕ Túnel WireGuard (EIP WG EC2)
+      OPNsense on-prem
 ```
 
-Las tres EC2 viven en `subnet-publica-dracs` (10.0.1.0/24), única subnet de la VPC `vpc-simple-dracs`. La EIP del Nginx es a la que apunta DuckDNS — sin NLB de por medio. El GLPI no tiene EIP porque solo se accede a través del Nginx (desde internet) o de la VPN (administración).
+WireGuard y Nginx viven en `subnet-publica-dracs` (10.0.1.0/24) con EIP propia. El GLPI está en `subnet-privada-dracs` (10.0.2.0/24), sin acceso directo desde internet — solo accesible desde el Nginx (proxy) y desde la VPN. El NAT Gateway permite que la instancia privada salga a internet para descargar paquetes en el arranque.
 
 ![](aws-simple-arquitectura.png){width=900px}
 <!-- captura del diagrama o de Resource Map de la VPC vpc-simple-dracs -->
@@ -63,12 +62,15 @@ Las tres EC2 viven en `subnet-publica-dracs` (10.0.1.0/24), única subnet de la 
 | Recurso | Valor |
 | --- | --- |
 | VPC | `vpc-simple-dracs` (10.0.0.0/16) |
-| Subnet | `subnet-publica-dracs` (10.0.1.0/24, una sola AZ) |
+| Subnet pública | `subnet-publica-dracs` (10.0.1.0/24, us-east-1a) |
+| Subnet privada | `subnet-privada-dracs` (10.0.2.0/24, us-east-1a) |
 | Internet Gateway | `igw-simple-dracs` |
-| Route table | `rt-publica-simple-dracs` con `0.0.0.0/0 → igw` |
+| NAT Gateway | `nat-simple-dracs` en subnet pública, EIP propia |
+| Route table pública | `rt-publica-simple-dracs` → `0.0.0.0/0` vía IGW |
+| Route table privada | `rt-privada-simple-dracs` → `0.0.0.0/0` vía NAT |
 | Rutas on-prem | `192.168.1.0/24`, `192.168.10.0/24`, `192.168.20.0/24` → ENI del WG EC2 (via `for_each`) |
 
-No hay NAT Gateway porque no hay subnet privada que necesite salir a internet. Todas las instancias tienen IP pública asignada (`map_public_ip_on_launch = true` en la subnet).
+El GLPI está en la subnet privada para que no sea accesible directamente desde internet. El NAT Gateway le permite salir a internet en el arranque (descarga de paquetes APT y el tarball de GLPI) sin exponerlo con una IP pública.
 
 ## 3.2 Instancias EC2
 
@@ -76,7 +78,7 @@ No hay NAT Gateway porque no hay subnet privada que necesite salir a internet. T
 | --- | --- | --- | --- | --- |
 | `ec2-wireguard-simple-dracs` | 10.0.1.10 | t3.micro | Sí | Gateway VPN site-to-site con OPNsense |
 | `ec2-nginx-simple-dracs` | 10.0.1.20 | t3.micro | Sí (DuckDNS apunta aquí) | Reverse proxy HTTPS hacia el GLPI |
-| `ec2-glpi-simple-dracs` | 10.0.1.30 | t3.small | No | Apache + PHP + MariaDB + GLPI 10.0.18, todo local |
+| `ec2-glpi-simple-dracs` | 10.0.2.30 (privada) | t3.small | No | Apache + PHP + MariaDB + GLPI 10.0.18, todo local |
 
 El `user_data` del Nginx recibe la IP privada del GLPI directamente desde Terraform:
 
