@@ -1,0 +1,20 @@
+# Renombrar a terraform.tfvars y rellenar los valores reales.
+# Este fichero NO debe commitearse (.gitignore ya lo excluye).
+
+# Contrasena para la BD MariaDB local de GLPI
+glpi_db_password = "cambia_esto"
+
+# Claves WireGuard del gateway AWS
+# Generarlas en la instancia con: wg genkey | tee privatekey | wg pubkey > publickey
+wg_aws_private_key = "clave_privada_base64_del_gateway_aws="
+
+# Clave publica del peer OPNsense (la que genera OPNsense en su interfaz WireGuard)
+wg_opnsense_public_key = "clave_publica_base64_del_opnsense="
+
+# Preshared key del tunel (opcional pero recomendada, generada con: wg genpsk)
+wg_preshared_key = "psk_base64="
+
+# Opcionales (tienen defaults):
+# region   = "us-east-1"
+# key_name = "dracs-keypair"
+# ami_id   = ""   # vacio = Ubuntu 24.04 latest

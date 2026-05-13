@@ -122,6 +122,13 @@ resource "aws_security_group" "glpi" {
     protocol    = "-1"
     cidr_blocks = ["10.8.0.0/24", "192.168.1.0/24", "192.168.10.0/24", "192.168.20.0/24"]
   }
+  ingress {
+    description     = "Proxy-Jump SSH desde Nginx"
+    from_port       = 0
+    to_port         = 0
+    protocol        = "-1"
+    security_groups = [aws_security_group.nginx.id]
+  }
   egress {
     from_port   = 0
     to_port     = 0

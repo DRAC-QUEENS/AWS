@@ -1,0 +1,68 @@
+# ---------- DATA SOURCES ----------
+
+data "aws_availability_zones" "azs" {}
+
+data "aws_ami" "ubuntu" {
+  most_recent = true
+  owners      = ["099720109477"]
+  filter {
+    name   = "name"
+    values = ["ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-*"]
+  }
+}
+
+# ---------- VPC ----------
+
+resource "aws_vpc" "main" {
+  cidr_block           = "10.0.0.0/16"
+  enable_dns_hostnames = true
+  tags                 = { Name = "vpc-simple-dracs" }
+}
+
+# ---------- SUBNET PUBLICA (una sola) ----------
+
+resource "aws_subnet" "public" {
+  vpc_id                  = aws_vpc.main.id
+  cidr_block              = "10.0.1.0/24"
+  availability_zone       = data.aws_availability_zones.azs.names[0]
+  map_public_ip_on_launch = true
+  tags                    = { Name = "subnet-publica-dracs" }
+}
+
+# ---------- INTERNET GATEWAY ----------
+
+resource "aws_internet_gateway" "igw" {
+  vpc_id = aws_vpc.main.id
+  tags   = { Name = "igw-simple-dracs" }
+}
+
+# ---------- ROUTE TABLE ----------
+
+resource "aws_route_table" "publica" {
+  vpc_id = aws_vpc.main.id
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.igw.id
+  }
+  tags = { Name = "rt-publica-simple-dracs" }
+}
+
+resource "aws_route_table_association" "publica" {
+  subnet_id      = aws_subnet.public.id
+  route_table_id = aws_route_table.publica.id
+}
+
+# ---------- ROUTES A REDES ON-PREM (via WireGuard) ----------
+# Sin estas rutas, las respuestas de GLPI a clientes VPN se perderían
+# porque el SO de GLPI intentaría salir por el IGW en vez de por WireGuard.
+
+locals {
+  onprem_cidrs = ["192.168.1.0/24", "192.168.10.0/24", "192.168.20.0/24"]
+}
+
+resource "aws_route" "onprem" {
+  for_each               = toset(local.onprem_cidrs)
+  route_table_id         = aws_route_table.publica.id
+  destination_cidr_block = each.value
+  network_interface_id   = aws_instance.wireguard.primary_network_interface_id
+}

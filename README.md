@@ -29,10 +29,10 @@ Infraestructura AWS del proyecto DRACS (ASIX2). Arquitectura híbrida con VPN Wi
                       └────────┘     └──────────┘
 
      PUBLIC 10.0.1.x                PUBLIC 10.0.3.x
-  ┌────────────────────┐         ┌──────────────────┐
-  │ WireGuard (10.0.1.10)│        │   (sin instancias)│
-  │ Nginx     (10.0.1.20)│        │                  │
-  └─────────────────────┘        └──────────────────┘
+  ┌─────────────────────┐       ┌──────────────────┐
+  │WireGuard (10.0.1.10)│       │ (sin instancias) │
+  │Nginx     (10.0.1.20)│       │                  │
+  └─────────────────────┘       └──────────────────┘
            ↕ WireGuard VPN (10.8.0.0/24)
      OPNsense on-prem (192.168.x.x)
 
