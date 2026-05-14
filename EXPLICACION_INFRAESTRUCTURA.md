@@ -18,10 +18,10 @@ INTERNET
 
 ON-PREM (Proxmox / OPNsense)
   └─ WireGuard VPN ──→ EC2 WireGuard (10.0.1.10)
-                            └─ Nginx (10.0.1.20) ──→ ALB ──→ ASG GLPI
+                            └─ Nginx (10.0.1.20) ──301──→ https://dracs-glpi.duckdns.org
 ```
 
-Dos caminos hacia GLPI: **internet** y **on-prem**. Los dos acaban llegando al ALB.
+Dos caminos hacia GLPI: **internet** y **on-prem**. Los dos acaban llegando al ALB (el de on-prem via redirección a la URL pública).
 
 ---
 
@@ -89,21 +89,23 @@ Usuario ──HTTPS──► ALB ──HTTP──► instancia GLPI
 ### Launch Template: la receta
 
 El Launch Template es el molde con el que se fabrica cada instancia GLPI. Define:
-- Qué imagen usar (Ubuntu 24.04 LTS)
+- Qué imagen usar (AMI Packer `ami-0f69b2f6a15d477e3`, o Ubuntu 24.04 LTS si no hay AMI configurada)
 - Qué tipo de instancia (`t3.small`)
 - Qué key pair para SSH (`dracs2`)
 - Qué Security Group aplicar
 - Qué IAM profile (da acceso a SSM Session Manager)
 - El `user_data`: el script que se ejecuta al arrancar la instancia
 
-El `user_data` es donde ocurre la magia. Cada vez que el ASG lanza una instancia nueva, ese script:
-1. Instala Apache, PHP y dependencias
-2. Monta el EFS en `/var/www/html/glpi/files`
-3. Descarga e instala GLPI (si no está ya)
-4. Configura `config_db.php` apuntando al endpoint RDS
-5. Restaura la `glpicrypt.key` desde EFS
-6. Inicializa o actualiza la BD si hace falta
-7. Configura Apache y lo arranca
+**La AMI Packer** contiene Apache, PHP 8.3 y GLPI 10.0.18 ya instalados y el VirtualHost de Apache configurado. El tiempo de arranque baja de ~8-10 minutos (descarga + instalación en caliente) a ~2 minutos (solo configuración runtime).
+
+El `user_data` se ejecuta en cada arranque y hace únicamente lo que requiere el entorno de runtime:
+1. Monta el EFS en `/mnt/efs` y crea los subdirectorios que GLPI necesita (`_sessions`, `_plugins`, etc.)
+2. Crea symlinks: `glpi/files → /mnt/efs/files` y `glpi/plugins → /mnt/efs/plugins`
+3. Si Apache o GLPI no están (AMI sin Packer), los instala y descarga
+4. Escribe `config_db.php` apuntando al endpoint RDS
+5. Restaura la `glpicrypt.key` desde EFS (si existe)
+6. Inicializa la BD con `db:install` si está vacía (con flock en EFS para evitar race condition entre instancias)
+7. Arranca Apache
 
 El resultado: una instancia GLPI completamente funcional, conectada a la BD y al almacenamiento compartido, sin intervención manual.
 
@@ -112,7 +114,7 @@ El resultado: una instancia GLPI completamente funcional, conectada a la BD y al
 El Auto Scaling Group usa el Launch Template para crear y destruir instancias automáticamente. Está configurado con:
 - `min = 0` — se puede apagar del todo (útil durante mantenimiento)
 - `max = 3` — nunca más de 3 instancias
-- `desired = 1` — en producción se mantiene 1 instancia
+- `desired = 2` — en producción se mantiene 1 instancia por AZ (alta disponibilidad real)
 
 Las instancias viven en las **subnets privadas** (`10.0.2.x` y `10.0.4.x`). Sin IP pública, sin acceso directo desde internet. El único que puede hablarles es el ALB (y la VPN).
 
@@ -187,30 +189,33 @@ GLPI cifra la configuración sensible (contraseñas LDAP, de correo, etc.) con u
 
 ### Por qué existe Nginx si ya hay ALB
 
-El ALB es accesible desde internet (y el NLB le pone IP fija para DuckDNS). Pero el personal de on-prem (detrás de OPNsense/Proxmox) no quiere ir por internet para acceder a GLPI — quiere ir por la VPN interna.
+El personal de on-prem (detrás de OPNsense/Proxmox) accede a GLPI por la VPN interna, no por internet. Nginx es el punto de entrada para ese tráfico.
 
 El flujo on-prem es:
 ```
 PC de on-prem (192.168.x.x)
   └─ OPNsense → túnel WireGuard → EC2 WireGuard (10.0.1.10)
                                         └─ Nginx (10.0.1.20)
-                                              └─ ALB → instancia GLPI
+                                              └─ redirige a https://dracs-glpi.duckdns.org
 ```
 
-Nginx escucha en `10.0.1.20` (IP privada, solo accesible por VPN) y hace de **reverse proxy** hacia el ALB. Cuando alguien de on-prem abre `https://10.0.1.20`, Nginx:
-1. Recibe la petición HTTPS (con un certificado autofirmado para el tráfico interno)
-2. La reenvía al ALB por HTTP: `proxy_pass http://alb-glpi-dracs-....elb.amazonaws.com`
-3. El ALB la procesa y responde
+Nginx escucha en `10.0.1.20:80` (IP privada, solo accesible por VPN) y **redirige con un 301** a la URL pública:
 
-El usuario de on-prem ve `https://10.0.1.20` (o el alias DNS que tengas configurado en el AD). El ALB ni sabe que el origen es on-prem.
+```nginx
+server {
+    listen 80;
+    server_name _;
+    return 301 https://dracs-glpi.duckdns.org$request_uri;
+}
+```
 
-### ¿Por qué no ir directo al ALB desde on-prem?
+El usuario de on-prem entra a `http://10.0.1.20` y el navegador le lleva automáticamente a `https://dracs-glpi.duckdns.org`, que tiene el cert ACM válido. Sin avisos del navegador, sin cert autofirmado.
 
-Se podría. Pero Nginx añade una capa de control:
-- Logs separados del tráfico interno
-- Posibilidad de añadir autenticación extra para acceso interno
-- Aísla el DNS interno del externo (no necesitas saber el DNS dinámico del ALB)
-- El cert autofirmado evita warnings de "sitio no seguro" en la red interna sin depender del cert público
+### Por qué se simplificó (antes era un reverse proxy)
+
+La versión anterior de Nginx hacía `proxy_pass` al ALB con un cert autofirmado en el lado HTTPS. Esto causaba que el navegador normal mostrara aviso de seguridad la primera vez, mientras que en el modo incógnito (caché limpia) funcionaba bien. La raíz era que el navegador cacheaba la decisión de confiar o no confiar en el cert autofirmado.
+
+La solución más limpia: eliminar el cert autofirmado y redirigir al dominio público que ya tiene cert ACM válido. Nginx pasa de proxy a redirector de una sola línea.
 
 ---
 
@@ -228,8 +233,7 @@ NLB ─────────────────────────�
   │
   ▼
 ALB  [sg-alb]
-  ├─ Acepta: 80/443 desde 0.0.0.0/0 (internet)
-  └─ Acepta: 80 desde sg-nginx (tráfico interno via Nginx)
+  └─ Acepta: 80/443 desde 0.0.0.0/0 (internet)
   │
   ▼
 GLPI ASG  [sg-glpi]
@@ -242,13 +246,17 @@ GLPI ASG  [sg-glpi]
   ▼                                  ▼
 RDS  [sg-rds]                      EFS  [sg-efs]
   └─ Acepta: 3306 desde sg-glpi      └─ Acepta: 2049 desde sg-glpi
+
+Nginx  [sg-nginx]
+  └─ Acepta: 80 desde 10.8.0.0/24 (solo desde el túnel WireGuard)
 ```
 
 **Lo que esto garantiza:**
 - Nadie desde internet puede conectarse directamente a GLPI, RDS o EFS
 - Solo el ALB puede mandar tráfico HTTP a GLPI
 - Solo GLPI puede conectarse a la BD y al almacenamiento
-- El acceso de administración (SSH, debug) solo es posible desde la VPN o from on-prem
+- Nginx solo es accesible desde la VPN (ya no tiene EIP ni tráfico de internet)
+- El acceso de administración (SSH, debug) solo es posible desde la VPN o desde on-prem
 
 ---
 
@@ -272,9 +280,10 @@ Una petición de un usuario de internet al GLPI sigue este camino:
 Y una petición desde on-prem:
 
 ```
-1. Usuario de on-prem abre https://10.0.1.20 (o el alias DNS interno)
+1. Usuario de on-prem abre http://10.0.1.20
 2. La petición va por la red on-prem → OPNsense → túnel WireGuard → AWS
 3. Llega a Nginx (10.0.1.20)
-4. Nginx hace proxy_pass al DNS del ALB en HTTP:80
-5. A partir de aquí, igual que el camino de internet (pasos 5-8)
+4. Nginx responde 301 → https://dracs-glpi.duckdns.org
+5. El navegador sigue la redirección: va a DuckDNS → NLB → ALB → GLPI
+6. A partir de aquí, igual que el camino de internet (pasos 3-8)
 ```
