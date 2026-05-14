@@ -21,6 +21,12 @@ chown www-data:www-data /mnt/efs/files /mnt/efs/plugins
 
 grep -q "/mnt/efs" /etc/fstab || echo "$EFS_DNS:/ /mnt/efs nfs4 nfsvers=4.1,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2,_netdev 0 0" >> /etc/fstab
 
+# Pre-crear subdirectorios que GLPI espera encontrar ya existentes
+for dir in _cache _cron _dumps _graphs _lock _log _maps _pictures _plugins _rss _sessions _tmp _uploads _meta/config; do
+  mkdir -p "/mnt/efs/files/$dir"
+done
+chown -R www-data:www-data /mnt/efs/files /mnt/efs/plugins
+
 # Enlazar los directorios EFS a las rutas que espera GLPI
 rm -rf /var/www/html/glpi/files /var/www/html/glpi/plugins
 ln -s /mnt/efs/files   /var/www/html/glpi/files
