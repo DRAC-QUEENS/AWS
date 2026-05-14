@@ -110,7 +110,7 @@ data "aws_acm_certificate" "glpi" {
   most_recent = true
   statuses    = ["ISSUED"]
   # Certbot emite cert ECDSA por defecto; el filtro por defecto del data source es RSA.
-  key_types = ["EC_prime256v1", "EC_secp384r1", "RSA_2048"]
+  key_types = ["EC_prime256v1", "EC_secp384r1"]
 }
 
 resource "aws_lb_listener" "alb_https" {
@@ -231,7 +231,7 @@ resource "aws_lb_listener" "nlb_https" {
 
 resource "aws_launch_template" "glpi" {
   name_prefix   = "lt-glpi-dracs-"
-  image_id      = data.aws_ami.ubuntu.id
+  image_id      = var.glpi_ami_id != "" ? var.glpi_ami_id : data.aws_ami.ubuntu.id
   instance_type = "t3.small"
   key_name      = var.key_name
 

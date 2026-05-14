@@ -2,10 +2,6 @@ output "wireguard_ip_publica" {
   value = aws_eip.wireguard.public_ip
 }
 
-output "nginx_ip_publica" {
-  value = aws_eip.nginx.public_ip
-}
-
 output "nlb_eip" {
   description = "IP fija del NLB -> apuntar DuckDNS aqui"
   value       = aws_eip.nlb.public_ip

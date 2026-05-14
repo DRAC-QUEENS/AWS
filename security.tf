@@ -34,23 +34,17 @@ resource "aws_security_group" "wireguard" {
   tags = { Name = "sg-wireguard-dracs" }
 }
 
+# Nginx: solo accesible desde el tunel WireGuard (no expuesto a internet)
 resource "aws_security_group" "nginx" {
   name   = "nginx-dracs"
   vpc_id = aws_vpc.main.id
 
   ingress {
-    description = "HTTP"
+    description = "HTTP desde el tunel WireGuard"
     from_port   = 80
     to_port     = 80
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-  ingress {
-    description = "HTTPS"
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+    cidr_blocks = ["10.8.0.0/24"]
   }
   ingress {
     description = "SSH solo desde el tunel VPN"
@@ -86,13 +80,6 @@ resource "aws_security_group" "alb" {
     to_port     = 443
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
-  }
-  ingress {
-    description     = "HTTP desde Nginx (trafico interno via WireGuard)"
-    from_port       = 80
-    to_port         = 80
-    protocol        = "tcp"
-    security_groups = [aws_security_group.nginx.id]
   }
   egress {
     from_port   = 0

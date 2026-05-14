@@ -6,13 +6,8 @@ variable "key_name" {
   default = "dracs-keypair"
 }
 
-variable "wireguard_ami_id" {
-  description = "AMI custom para la EC2 WireGuard (migracion entre cuentas). Vacio = Ubuntu 24.04 LTS latest."
-  default     = ""
-}
-
-variable "nginx_ami_id" {
-  description = "AMI custom para la EC2 Nginx (migracion entre cuentas). Vacio = Ubuntu 24.04 LTS latest."
+variable "glpi_ami_id" {
+  description = "AMI pre-instalada con GLPI (creada por Packer). Vacio = Ubuntu 24.04 LTS latest."
   default     = ""
 }
 
