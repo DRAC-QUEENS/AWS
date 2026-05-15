@@ -286,3 +286,20 @@ resource "aws_autoscaling_group" "glpi" {
     propagate_at_launch = true
   }
 }
+
+# ---------- Política de escalado (Target Tracking CPU) ----------
+
+resource "aws_autoscaling_policy" "glpi_cpu" {
+  name                   = "asg-glpi-cpu-tracking"
+  autoscaling_group_name = aws_autoscaling_group.glpi.name
+  policy_type            = "TargetTrackingScaling"
+
+  target_tracking_configuration {
+    predefined_metric_specification {
+      predefined_metric_type = "ASGAverageCPUUtilization"
+    }
+    target_value     = 60.0
+    # Tiempo mínimo entre scale-in: 300s (evita flapping)
+    disable_scale_in = false
+  }
+}

@@ -21,6 +21,12 @@ resource "aws_instance" "wireguard" {
     encrypted   = true
   }
 
+  # Instancia "pet": ignorar nuevas AMIs de Ubuntu y cambios en user_data
+  # (user_data solo corre en el primer boot; cambiarlo no afecta a instancias ya en marcha)
+  lifecycle {
+    ignore_changes = [ami, user_data]
+  }
+
   tags = { Name = "ec2-wireguard-dracs" }
 }
 
@@ -39,6 +45,11 @@ resource "aws_instance" "nginx" {
   root_block_device {
     volume_size = 30
     encrypted   = true
+  }
+
+  # Instancia "pet": ignorar nuevas AMIs de Ubuntu y cambios en user_data
+  lifecycle {
+    ignore_changes = [ami, user_data]
   }
 
   tags = { Name = "ec2-nginx-dracs" }
