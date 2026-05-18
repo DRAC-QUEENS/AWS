@@ -33,6 +33,15 @@ ln -s /mnt/efs/files   /var/www/html/glpi/files
 ln -s /mnt/efs/plugins /var/www/html/glpi/plugins
 echo "[✓] EFS montado y symlinks creados"
 
+# Certbot: instalar y restaurar cert desde EFS si existe
+apt-get install -y certbot python3-certbot-dns-duckdns 2>/dev/null || true
+if [ -d /mnt/efs/letsencrypt/live ]; then
+  cp -a /mnt/efs/letsencrypt/. /etc/letsencrypt/
+  echo "[✓] Certbot cert restaurado desde EFS"
+else
+  echo "[$(date)] Sin cert en EFS — se requiere emision manual con certbot"
+fi
+
 # Paso 2: Instalar paquetes si no están (en AMI Packer ya vienen instalados)
 if ! command -v apache2 &>/dev/null; then
   echo "[$(date)] Instalando Apache, PHP y dependencias..."
@@ -133,7 +142,30 @@ fi
 
 flock -u 9
 
-# Paso 7: Arrancar Apache
+# Paso 7: VirtualHost Apache — se sobreescribe siempre para garantizar RewriteRule
+# (cubre tanto instalaciones frescas como instancias desde AMI Packer)
+cat > /etc/apache2/sites-available/glpi.conf << 'APACHE_CONF'
+<VirtualHost *:80>
+    DocumentRoot /var/www/html/glpi
+
+    RewriteEngine On
+    RewriteRule ^/glpi(/.*)?$ /$1 [R=301,L]
+
+    <Directory /var/www/html/glpi>
+        Options FollowSymLinks
+        AllowOverride All
+        Require all granted
+    </Directory>
+    ErrorLog /var/log/apache2/glpi_error.log
+    CustomLog /var/log/apache2/glpi_access.log combined
+</VirtualHost>
+APACHE_CONF
+a2ensite glpi.conf 2>/dev/null || true
+a2dissite 000-default.conf 2>/dev/null || true
+a2enmod rewrite
+echo "[✓] VirtualHost Apache actualizado"
+
+# Paso 8: Arrancar Apache
 systemctl restart apache2
 echo "[✓] Apache arrancado"
 
