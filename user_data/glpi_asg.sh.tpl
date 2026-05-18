@@ -149,7 +149,7 @@ cat > /etc/apache2/sites-available/glpi.conf << 'APACHE_CONF'
     DocumentRoot /var/www/html/glpi
 
     RewriteEngine On
-    RewriteRule ^/glpi(/.*)?$ /$1 [R=301,L]
+    RewriteRule ^/glpi/?(.*)$ /$1 [R=301,L]
 
     <Directory /var/www/html/glpi>
         Options FollowSymLinks
