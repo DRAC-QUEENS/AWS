@@ -110,7 +110,7 @@ data "aws_acm_certificate" "glpi" {
   most_recent = true
   statuses    = ["ISSUED"]
   # Certbot emite cert ECDSA por defecto; el filtro por defecto del data source es RSA.
-  key_types = ["EC_prime256v1", "EC_secp384r1", "RSA_2048"]
+  key_types = ["EC_prime256v1", "EC_secp384r1"]
 }
 
 resource "aws_lb_listener" "alb_https" {
@@ -231,7 +231,7 @@ resource "aws_lb_listener" "nlb_https" {
 
 resource "aws_launch_template" "glpi" {
   name_prefix   = "lt-glpi-dracs-"
-  image_id      = data.aws_ami.ubuntu.id
+  image_id      = var.glpi_ami_id != "" ? var.glpi_ami_id : data.aws_ami.ubuntu.id
   instance_type = "t3.small"
   key_name      = var.key_name
 
@@ -284,5 +284,22 @@ resource "aws_autoscaling_group" "glpi" {
     key                 = "Name"
     value               = "ec2-glpi-asg-dracs"
     propagate_at_launch = true
+  }
+}
+
+# ---------- Política de escalado (Target Tracking CPU) ----------
+
+resource "aws_autoscaling_policy" "glpi_cpu" {
+  name                   = "asg-glpi-cpu-tracking"
+  autoscaling_group_name = aws_autoscaling_group.glpi.name
+  policy_type            = "TargetTrackingScaling"
+
+  target_tracking_configuration {
+    predefined_metric_specification {
+      predefined_metric_type = "ASGAverageCPUUtilization"
+    }
+    target_value     = 60.0
+    # Tiempo mínimo entre scale-in: 300s (evita flapping)
+    disable_scale_in = false
   }
 }

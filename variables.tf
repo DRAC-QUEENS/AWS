@@ -6,20 +6,15 @@ variable "key_name" {
   default = "dracs-keypair"
 }
 
-variable "wireguard_ami_id" {
-  description = "AMI custom para la EC2 WireGuard (migracion entre cuentas). Vacio = Ubuntu 24.04 LTS latest."
-  default     = ""
-}
-
-variable "nginx_ami_id" {
-  description = "AMI custom para la EC2 Nginx (migracion entre cuentas). Vacio = Ubuntu 24.04 LTS latest."
+variable "glpi_ami_id" {
+  description = "AMI pre-instalada con GLPI (creada por Packer). Vacio = Ubuntu 24.04 LTS latest."
   default     = ""
 }
 
 variable "asg_desired" {
-  description = "Numero de instancias deseado en el ASG GLPI. Bajar a 0 durante migracion de datos a RDS+EFS, luego subir a 1."
+  description = "Numero de instancias deseado en el ASG GLPI (una por AZ). Bajar a 0 para mantenimiento."
   type        = number
-  default     = 1
+  default     = 2
 }
 
 variable "glpi_public_url" {

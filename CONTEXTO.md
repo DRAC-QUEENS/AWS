@@ -1,6 +1,6 @@
 # DRACS — Contexto de infraestructura AWS
 
-> Actualizado: 2026-05-13  
+> Actualizado: 2026-05-14  
 > Cuenta activa: **123561366922** (la nueva)  
 > Cuenta antigua desactivada: 947411159788
 
@@ -12,12 +12,12 @@
 Internet
   └─ NLB (EIP fija: 50.19.112.122 → DuckDNS: dracs-glpi.duckdns.org)
        └─ ALB (alb-glpi-dracs, interno distribución L7)
-            └─ ASG GLPI (1-3 × t3.small, subnet privada)
+            └─ ASG GLPI (2 × t3.small, una por AZ, subnet privada)
                  ├─ RDS MariaDB 10.11 (rds-glpi-dracs, subnet privada)
-                 └─ EFS (fs-0e3a12b50ac2f89b3, compartido entre instancias)
+                 └─ EFS (fs-00891f16aba18e12b, compartido entre instancias)
 
 On-prem (OPNsense) ←─WireGuard site-to-site─→ EC2 WireGuard (10.0.1.10)
-  └─ Nginx (10.0.1.20) actúa como proxy HTTP hacia el ALB para tráfico interno
+  └─ Nginx (10.0.1.20) redirige HTTP → https://dracs-glpi.duckdns.org
 ```
 
 ---
@@ -27,11 +27,11 @@ On-prem (OPNsense) ←─WireGuard site-to-site─→ EC2 WireGuard (10.0.1.10)
 | Recurso | IP/DNS | Notas |
 |---|---|---|
 | WireGuard EC2 | EIP **34.204.119.208** | Puerto 51820/UDP |
-| Nginx EC2 | EIP **34.205.176.217** | Proxy HTTP → ALB |
+| Nginx EC2 | IP privada **10.0.1.20** | Solo accesible vía VPN; redirige a la URL pública |
 | NLB | EIP **50.19.112.122** | DuckDNS apunta aquí |
 | ALB | alb-glpi-dracs-949041849.us-east-1.elb.amazonaws.com | L7, TLS termina aquí |
 | RDS | rds-glpi-dracs.capsrvyl1db1.us-east-1.rds.amazonaws.com | Puerto 3306 |
-| EFS | fs-0e3a12b50ac2f89b3.efs.us-east-1.amazonaws.com | NFS puerto 2049 |
+| EFS | fs-00891f16aba18e12b.efs.us-east-1.amazonaws.com | NFS puerto 2049 |
 | GLPI URL | https://dracs-glpi.duckdns.org | TLS via ACM + certbot |
 
 ### IPs privadas fijas (EC2)
@@ -180,10 +180,12 @@ sudo wg show
 | GLPI auth LDAP/AD falla | ✅ RESUELTO | Windows Firewall del DC bloqueaba TCP/389 desde las subnets nuevas. Se amplió el scope a `10.0.0.0/16` en las reglas inbound del DC. |
 | CSS roto (GLPI sin estilos) | ✅ RESUELTO | `DocumentRoot` cambiado de `/public` a `/var/www/html/glpi` (modo legacy GLPI 10). |
 | 404 tras login (`/glpi`) | ✅ RESUELTO | `url_base` en BD apuntaba a ruta antigua. Se fuerza en cada arranque del ASG via `user_data`. |
-| `glpicrypt.key` no encontrada | ✅ RESUELTO | EC2 migrator segundo pasó a copiar `config/` completo a EFS `/_meta/config/`. El `user_data` la restaura en cada arranque. |
+| `glpicrypt.key` no encontrada | ✅ RESUELTO | `user_data` restaura desde EFS `/_meta/config/` en cada arranque. |
 | WireGuard no establecía handshake | ✅ RESUELTO | OPNsense apuntaba al EIP de la cuenta vieja. Actualizado a `34.204.119.208:51820`. |
-| ACM no encontraba el cert ECDSA | ✅ RESUELTO | `data "aws_acm_certificate"` necesita `key_types = ["EC_prime256v1", "EC_secp384r1", "RSA_2048"]`. |
+| ACM no encontraba el cert ECDSA | ✅ RESUELTO | `key_types = ["EC_prime256v1", "EC_secp384r1"]` en `data "aws_acm_certificate"`. |
 | NLB→ALB race condition en `apply` | ✅ RESUELTO | Añadido `depends_on = [aws_lb_listener.alb_http]` al `target_group_attachment`. |
+| Nginx cert autofirmado (aviso navegador) | ✅ RESUELTO | Nginx ya no sirve tráfico de aplicación; redirige al dominio público con cert ACM válido. |
+| ASG health-check falla en instancias nuevas | ✅ RESUELTO | GLPI requería subdirectorios en EFS (`_plugins`, `_sessions`, etc.) antes de `db:install`. El `user_data` los pre-crea. |
 | Regla iptables huérfana en WG EC2 | ⚠️ INOFENSIVA | Regla `MASQUERADE` en `eth0` (interfaz correcta es `ens5`). Se acumula con reinicios pero no afecta al funcionamiento. Para limpiar: `sudo iptables -t nat -D POSTROUTING -o eth0 -j MASQUERADE` |
 | Cert TLS renovación automatizada | 🔲 PENDIENTE | Let's Encrypt caduca cada 90 días (próxima caducidad ~2026-08-09). Ver `AWS-RUNBOOK.md` sección 5. |
 
@@ -196,9 +198,8 @@ Fichero `terraform.tfvars` está gitignored. Variables necesarias:
 | Variable | Descripción |
 |---|---|
 | `key_name` | `dracs2` |
-| `wireguard_ami_id` | AMI migrada de cuenta vieja (o vacío para Ubuntu latest) |
-| `nginx_ami_id` | AMI migrada de cuenta vieja (o vacío para Ubuntu latest) |
-| `asg_desired` | 0 durante mantenimiento, 1 en producción |
+| `glpi_ami_id` | AMI Packer con GLPI pre-instalado (vacío = Ubuntu 24.04 LTS latest) |
+| `asg_desired` | 0 durante mantenimiento, 2 en producción (una instancia por AZ) |
 | `glpi_db_password` | Contraseña RDS |
 | `wg_aws_private_key` | Clave privada WireGuard AWS |
 | `wg_opnsense_public_key` | Clave pública del peer OPNsense |
@@ -211,13 +212,14 @@ Fichero `terraform.tfvars` está gitignored. Variables necesarias:
 | Recurso | ID |
 |---|---|
 | VPC | vpc-dracs |
-| EFS | fs-0e3a12b50ac2f89b3 |
+| EFS | fs-00891f16aba18e12b |
 | RDS | rds-glpi-dracs |
 | ASG | asg-glpi-dracs |
 | ALB | alb-glpi-dracs |
 | NLB | nlb-glpi-dracs |
 | EC2 WireGuard | i-0bc21dfec3bfa79eb |
 | EC2 Nginx | i-0826d318ae07dfe40 |
+| AMI GLPI (Packer) | ami-0f69b2f6a15d477e3 |
 | EC2 GLPI | dinámico (ASG); recupera con `aws autoscaling describe-auto-scaling-groups --auto-scaling-group-names asg-glpi-dracs` |
 
 ---
@@ -270,6 +272,27 @@ aws ssm start-session --target i-0bc21dfec3bfa79eb --region us-east-1
 - `depends_on = [aws_lb_listener.alb_http]` en NLB→ALB attachment (race condition en `terraform apply`).
 - `key_types = ["EC_prime256v1", "EC_secp384r1", "RSA_2048"]` en `data "aws_acm_certificate"`.
 - `user_data` fuerza `url_base` en BD en cada arranque (evita redireccionamiento a `/glpi` post-migración).
+
+### Sprint 4 — Simplificación y AMI Packer (2026-05-14)
+
+**Objetivo:** limpiar la infra, eliminar complejidad heredada de la migración y mejorar el tiempo de arranque del ASG.
+
+**Cambios principales:**
+- **Nginx simplificado:** de reverse proxy con cert autofirmado (causa de los warnings en navegador normal) a redirector HTTP→HTTPS puro. Sin `proxy_pass`, sin `openssl`. La EIP de Nginx eliminada; solo accesible en `10.0.1.20` vía VPN.
+- **Packer AMI** (`ami-0f69b2f6a15d477e3`): Ubuntu 24.04 + Apache + PHP 8.3 + GLPI 10.0.18 pre-instalados. Tiempo de arranque de instancias: ~2 min vs ~8-10 min con descarga en caliente.
+- **EFS restructurado:** montaje único en `/mnt/efs` + symlinks `glpi/files → /mnt/efs/files` y `glpi/plugins → /mnt/efs/plugins`. Los plugins de GLPI ahora también son compartidos entre instancias del ASG.
+- **`user_data` simplificado:** instalación condicional (salta `apt-get` y descarga si el AMI Packer ya lo trae). Pre-crea todos los subdirectorios que GLPI necesita en EFS antes de `db:install` (fix del race condition de health-check).
+- **AMI backups eliminados:** la función de backup de AMIs (`create_ami_backup`) era innecesaria con RDS y EFS.
+- **Variables limpias:** eliminadas `wireguard_ami_id` y `nginx_ami_id` (migración ya completada); añadida `glpi_ami_id`.
+- **ASG desired = 2:** una instancia por AZ para alta disponibilidad real.
+- **ACM simplificado:** `key_types = ["EC_prime256v1", "EC_secp384r1"]` (sin RSA).
+- **`glpicrypt.key` en EFS** (`files/_meta/config/`): se restaura automáticamente en cada arranque. Protege las integraciones LDAP/SMTP contra recreación de instancias.
+
+**Nota técnica — SQL vía SSM:**
+El paso de SQL con comillas simples a través del array `commands` de SSM es propenso a bugs de quoting (`'; WHERE` en vez de `' WHERE` convierte un UPDATE con WHERE en un UPDATE sin WHERE que sobreescribe toda la tabla). La solución definitiva: codificar el SQL en base64 y decodificarlo en el pipe de mysql.
+```bash
+echo "<sql_en_base64>" | base64 -d | mysql -h $RDS -u $USER -p$PASS $DB
+```
 
 ### Documentación (2026-05-13)
 Generados 10 documentos en `docs/aws/` siguiendo el estilo de documentación del proyecto (tono narrativo, tablas, `> Nota:`, sección "Documentación relacionada"):
