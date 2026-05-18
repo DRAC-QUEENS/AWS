@@ -10,16 +10,17 @@ Toda la infraestructura está descrita como código en Terraform. El repo contie
 | --- | --- |
 | `provider.tf` | Provider AWS (~> 6.0) + bloque `backend "s3"` (comentado hasta el bootstrap) |
 | `backend.tf` | Bucket S3 y tabla DynamoDB para guardar el state remoto |
-| `variables.tf` | Todas las variables del proyecto (región, key pair, AMIs, contraseñas, claves WG, etc.) |
+| `variables.tf` | Todas las variables del proyecto (región, key pair, `glpi_ami_id`, `asg_desired`, contraseñas, claves WG) |
 | `network.tf` | VPC, 4 subnets en 2 AZs, IGW, NAT, route tables, rutas a on-prem |
 | `security.tf` | Los 6 Security Groups |
-| `instances.tf` | EC2 WireGuard + EC2 Nginx (con sus EIPs y associations) |
-| `glpi_scaling.tf` | EFS, RDS, ALB (HTTP+HTTPS), NLB, Launch Template, Auto Scaling Group, listeners y target groups |
-| `backups.tf` | Bucket S3 de backups de aplicación + lógica opcional de AMI snapshot |
-| `outputs.tf` | Outputs principales (DNS ALB, EIP NLB, EIP WG, EIP Nginx, endpoint RDS, ID EFS) |
+| `instances.tf` | EC2 WireGuard (con EIP) + EC2 Nginx (sólo IP privada) |
+| `glpi_scaling.tf` | EFS, RDS, ALB (HTTP+HTTPS), NLB, Launch Template, Auto Scaling Group, listeners, target groups y política de autoescalado por CPU |
+| `backups.tf` | Bucket S3 de backups de aplicación con lifecycle a Glacier (30 d) y expiración (365 d) |
+| `outputs.tf` | Outputs principales (DNS ALB, EIP NLB, EIP WG, endpoint RDS, ID EFS, buckets S3) |
+| `packer/glpi.pkr.hcl` | Plantilla Packer para construir la AMI custom con GLPI pre-instalado |
 | `user_data/wireguard.sh.tpl` | Bootstrap del WG EC2 (claves inyectadas vía `templatefile`) |
-| `user_data/nginx.sh.tpl` | Bootstrap del Nginx EC2 (DNS del ALB inyectado vía `templatefile`) |
-| `user_data/glpi_asg.sh.tpl` | Bootstrap idempotente de las instancias del ASG |
+| `user_data/nginx.sh.tpl` | Bootstrap del Nginx EC2 (URL pública inyectada vía `templatefile`) |
+| `user_data/glpi_asg.sh.tpl` | Bootstrap idempotente de las instancias del ASG (EFS, certbot restore, BD, VirtualHost con `RewriteRule /glpi → /`) |
 
 # 2. Variables
 
@@ -29,28 +30,27 @@ Toda la infraestructura está descrita como código en Terraform. El repo contie
 | --- | --- | --- | --- |
 | `region` | string | `us-east-1` | Región AWS |
 | `key_name` | string | `dracs-keypair` | Key pair EC2. En la cuenta actual usamos `dracs2` vía `tfvars` |
-| `wireguard_ami_id` | string | `""` | AMI custom del WG (de la migración). Vacío = Ubuntu 24.04 LTS latest |
-| `nginx_ami_id` | string | `""` | AMI custom del Nginx. Vacío = Ubuntu 24.04 LTS latest |
-| `asg_desired` | number | `1` | `desired_capacity` del ASG. Se baja a 0 durante la migración de datos |
+| `glpi_ami_id` | string | `""` | AMI Packer con GLPI pre-instalado. Vacío = Ubuntu 24.04 LTS latest |
+| `asg_desired` | number | `2` | `desired_capacity` del ASG (una instancia por AZ). Se baja a 0 durante mantenimiento |
 | `glpi_public_url` | string | `https://dracs-glpi.duckdns.org` | URL pública; se fuerza en `glpi_configs.url_base` en cada arranque del ASG |
 | `glpi_db_password` | string (sensitive) | *(requerida)* | Contraseña RDS de GLPI |
 | `wg_aws_private_key` | string (sensitive) | *(requerida)* | Clave privada WireGuard del lado AWS |
 | `wg_opnsense_public_key` | string (sensitive) | *(requerida)* | Clave pública del peer OPNsense |
 | `wg_preshared_key` | string (sensitive) | *(requerida)* | PSK del túnel |
-| `create_ami_backup` | bool | `false` | Si `true`, crea AMIs snapshot de WG y Nginx en ese `apply` |
 
 Las variables marcadas `sensitive` no aparecen en logs ni outputs. Se pasan en `terraform.tfvars`:
 
 ```hcl
 key_name               = "dracs2"
-wireguard_ami_id       = "ami-00b8adcfe191bdbee"
-nginx_ami_id           = "ami-0e4a3b807311fb06f"
-asg_desired            = 1
+glpi_ami_id            = "ami-0f69b2f6a15d477e3"
+asg_desired            = 2
 glpi_db_password       = "<contraseña>"
 wg_aws_private_key     = "<key>"
 wg_opnsense_public_key = "<key>"
 wg_preshared_key       = "<key>"
 ```
+
+> **Nota sobre `glpi_ami_id`:** la AMI Packer se construye con la plantilla `packer/glpi.pkr.hcl` y reduce el tiempo de arranque de las instancias del ASG de ~10 min a ~2 min. Si la variable se deja vacía, el Launch Template cae a Ubuntu 24.04 LTS vanilla y el `user_data` instala todo en caliente como fallback.
 
 > **Nota:** `terraform.tfvars` está en `.gitignore`. Hay que regenerarlo manualmente en cada equipo o cuenta nueva.
 

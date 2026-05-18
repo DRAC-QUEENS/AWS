@@ -12,10 +12,11 @@ Es el extremo AWS del túnel WireGuard. Vive en la subnet pública con IP privad
 | --- | --- |
 | Name | `ec2-wireguard-dracs` |
 | Tipo | `t3.micro` |
-| AMI | `var.wireguard_ami_id` (custom de la cuenta anterior) o Ubuntu 24.04 LTS si vacía |
+| AMI | `data.aws_ami.ubuntu.id` (Ubuntu 24.04 LTS latest) |
 | IP privada | `10.0.1.10` |
 | EIP | `34.204.119.208` (al cambiar de cuenta, hay que actualizar el Endpoint en OPNsense) |
 | `source_dest_check` | `false` (imprescindible para que actúe como router) |
+| `lifecycle` | `ignore_changes = [ami, user_data]` (instancia "pet": no se reemplaza por cambios de AMI ni de user_data) |
 
 ![](aws-wireguard-ec2.png){width=900px}
 <!-- captura: AWS Console → EC2 → Instances → ec2-wireguard-dracs → Details -->
@@ -64,44 +65,48 @@ PersistentKeepalive = 25
 
 > **Nota sobre la interfaz:** en Ubuntu 24.04 la interfaz Ethernet por defecto se llama `ens5`, no `eth0`. El script detecta dinámicamente el nombre con `ip route show default | awk '{print $5}'` y lo usa para el MASQUERADE.
 
-# 3. EC2 Nginx — Reverse Proxy interno
+# 3. EC2 Nginx — Redirector HTTP interno
 
 ---
 
-Esta EC2 sirve como pasarela HTTPS interna para los usuarios que llegan desde on-prem. Aunque desde la VPN podrían acceder al ALB directamente, Nginx aísla el DNS interno del externo y permite controlar/loggear el tráfico interno por separado.
+Tras Sprint 4 Nginx se ha simplificado: ya no termina TLS ni hace `proxy_pass`. Su único trabajo es devolver un `301 Redirect` al dominio público para los usuarios que entran por la VPN. El certificado público del ALB (Let's Encrypt) sirve a todos los usuarios, incluido el tráfico interno, evitando el warning de navegador del cert autofirmado que existía antes.
 
 | Atributo | Valor |
 | --- | --- |
 | Name | `ec2-nginx-dracs` |
 | Tipo | `t3.micro` |
-| AMI | `var.nginx_ami_id` (custom) o Ubuntu 24.04 LTS |
+| AMI | `data.aws_ami.ubuntu.id` (Ubuntu 24.04 LTS latest) |
 | IP privada | `10.0.1.20` |
-| EIP | `34.205.176.217` |
+| EIP | Ninguna (solo accesible desde el túnel WireGuard) |
+| `lifecycle` | `ignore_changes = [ami, user_data]` |
 
 # 4. user_data del Nginx
 
 ---
 
-El `user_data` se inyecta con `templatefile()` para que Terraform ponga ahí el DNS del ALB en tiempo de despliegue. Si el ALB se recrea, hay que re-aplicar Terraform y reemplazar la instancia Nginx para que coja el nuevo DNS.
+El `user_data` se inyecta con `templatefile()` para que Terraform ponga ahí la URL pública en tiempo de despliegue:
 
 ```hcl
 user_data = templatefile("user_data/nginx.sh.tpl", {
-  alb_dns = aws_lb.alb.dns_name
+  glpi_url = var.glpi_public_url
 })
 ```
 
-El script:
+El script (`user_data/nginx.sh.tpl`) instala Nginx y escribe un único bloque `server`:
 
-1. Instala `nginx` y `openssl`.
-2. Genera un certificado autofirmado (`/etc/nginx/ssl/dracs.crt`) si no existe, válido 10 años, CN `dracs.local`.
-3. Escribe `/etc/nginx/sites-available/glpi` con dos `server`:
-   - Puerto 80 → `return 301 https://$host$request_uri;`
-   - Puerto 443 → `proxy_pass http://<alb_dns>` con headers `Host`, `X-Real-IP`, `X-Forwarded-For`, `X-Forwarded-Proto`.
-4. Habilita el sitio, deshabilita el default, valida y reinicia Nginx.
+```nginx
+server {
+    listen 80;
+    server_name _;
+    return 301 ${glpi_url}$request_uri;
+}
+```
 
-Acceso desde on-prem: `https://10.0.1.20/` (o el alias DNS interno configurado en el AD). El certificado autofirmado dispara el warning de navegador la primera vez, pero al ser tráfico interno se asume ese coste.
+`${glpi_url}` lo sustituye Terraform por el valor de `var.glpi_public_url` (por defecto `https://dracs-glpi.duckdns.org`). Cualquier petición HTTP que llegue al puerto 80 de Nginx se redirige al dominio público, donde el ALB termina TLS con el cert válido de Let's Encrypt.
 
-> **Nota:** el cert autofirmado se usa **solo** dentro de la VPN. El tráfico desde internet llega por el NLB/ALB, donde el cert es el público de Let's Encrypt (ver `AWS-BALANCEO.md`).
+Acceso desde on-prem: `http://10.0.1.20/` (cualquier path). El navegador recibirá un 301 hacia `https://dracs-glpi.duckdns.org/<path>` y a partir de ahí el flujo es el mismo que el del tráfico público.
+
+> **Nota:** Nginx solo escucha en HTTP:80, no en 443. No genera ni utiliza certificados. La simplificación elimina la complejidad de gestionar un cert autofirmado y el warning de navegador asociado.
 
 # 5. Documentación relacionada
 

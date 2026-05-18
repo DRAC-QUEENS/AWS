@@ -146,13 +146,15 @@ data "aws_acm_certificate" "glpi" {
   most_recent = true
   statuses    = ["ISSUED"]
   # certbot emite ECDSA por defecto; el filtro por defecto del data source es RSA
-  key_types = ["EC_prime256v1", "EC_secp384r1", "RSA_2048"]
+  key_types = ["EC_prime256v1", "EC_secp384r1"]
 }
 ```
 
-> **Nota sobre key_types:** sin esto el data source no encuentra el cert. Pasamos los tres tipos para soportar ambos modos por si se cambiase la flag de certbot.
+> **Nota sobre key_types:** sin esto el data source no encuentra el cert. Se incluyen los dos tipos ECDSA que emite certbot por defecto. Si en algún momento se cambiase a RSA habría que añadir `RSA_2048`.
 
 > **Nota sobre la renovación:** los certs Let's Encrypt duran 90 días. Hoy la renovación no está automatizada: hay que volver a ejecutar el certbot, re-importar a ACM y el `data source` cogerá la versión nueva en el siguiente `terraform apply`. El runbook tiene los pasos detallados.
+
+> **Nota sobre la persistencia del cert:** desde Sprint 4 los ficheros del cert se guardan en EFS (`/mnt/efs/letsencrypt/`) y el `user_data` del ASG los restaura a `/etc/letsencrypt` en cada arranque. Esto evita tener que volver a instalar certbot y emitir el cert desde cero cada vez que se reemplaza una instancia del ASG. La operación de copiar `cp -a /etc/letsencrypt /mnt/efs/letsencrypt/` sigue siendo manual tras cada renovación.
 
 # 5. Flujo del tráfico
 
@@ -173,10 +175,12 @@ data "aws_acm_certificate" "glpi" {
 **Desde on-prem:**
 
 ```
-1. Usuario interno → https://10.0.1.20/ (Nginx)
-2. Nginx termina su TLS autofirmado, hace proxy_pass al DNS del ALB en HTTP
-3. A partir de aquí, igual al flujo de internet pero entrando por el ALB directamente (sin pasar por NLB)
+1. Usuario interno → http://10.0.1.20/ (Nginx)
+2. Nginx devuelve 301 → https://dracs-glpi.duckdns.org/<path>
+3. A partir de aquí, mismo flujo que el del tráfico público (DuckDNS → NLB → ALB → ASG)
 ```
+
+> **Nota:** Nginx ya no termina TLS ni hace `proxy_pass`. Todos los usuarios — internos y externos — consumen el cert público del ALB.
 
 # 6. Documentación relacionada
 

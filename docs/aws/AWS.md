@@ -81,7 +81,7 @@ A continuación se justifican las decisiones técnicas más relevantes que difer
 
 **TLS termina en el ALB.** El cert vive en ACM (importado desde certbot, ver `AWS-BALANCEO.md`). El backend trabaja en HTTP plano dentro de la VPC, lo que simplifica la configuración de los target groups.
 
-**Ubuntu vanilla en el ASG, no AMI custom de GLPI.** Aunque tenemos una AMI custom de la GLPI vieja (de la cuenta anterior), no se usa para arrancar las instancias del ASG. El `user_data` instala GLPI desde cero en cada arranque contra RDS+EFS, que es donde están los datos. La AMI custom se utilizó solo como **fuente** para migrar BD y ficheros a RDS y EFS la primera vez.
+**AMI Packer con GLPI pre-instalado.** Tras Sprint 4 el Launch Template usa una AMI custom construida con Packer (`packer/glpi.pkr.hcl`) que trae Ubuntu 24.04 + Apache + PHP 8.3 + GLPI 10.0.18 ya instalados. Esto reduce el tiempo de arranque de una instancia nueva de ~10 minutos a ~2 minutos. El `user_data` sigue siendo idempotente: si la AMI ya trae lo que necesita, salta los pasos de descarga e instalación; si se usa Ubuntu vanilla (`var.glpi_ami_id = ""`), instala todo desde cero como fallback. Los datos persistentes (BD y ficheros) siguen viviendo en RDS y EFS, fuera del compute.
 
 # 4. Problemas encontrados
 

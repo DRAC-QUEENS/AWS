@@ -1,6 +1,6 @@
 # DRACS — Contexto de infraestructura AWS
 
-> Actualizado: 2026-05-14  
+> Actualizado: 2026-05-18  
 > Cuenta activa: **123561366922** (la nueva)  
 > Cuenta antigua desactivada: 947411159788
 
@@ -187,7 +187,8 @@ sudo wg show
 | Nginx cert autofirmado (aviso navegador) | ✅ RESUELTO | Nginx ya no sirve tráfico de aplicación; redirige al dominio público con cert ACM válido. |
 | ASG health-check falla en instancias nuevas | ✅ RESUELTO | GLPI requería subdirectorios en EFS (`_plugins`, `_sessions`, etc.) antes de `db:install`. El `user_data` los pre-crea. |
 | Regla iptables huérfana en WG EC2 | ⚠️ INOFENSIVA | Regla `MASQUERADE` en `eth0` (interfaz correcta es `ens5`). Se acumula con reinicios pero no afecta al funcionamiento. Para limpiar: `sudo iptables -t nat -D POSTROUTING -o eth0 -j MASQUERADE` |
-| Cert TLS renovación automatizada | 🔲 PENDIENTE | Let's Encrypt caduca cada 90 días (próxima caducidad ~2026-08-09). Ver `AWS-RUNBOOK.md` sección 5. |
+| Cert TLS renovación automatizada | 🔲 PENDIENTE | Let's Encrypt caduca cada 90 días (próxima caducidad ~2026-08-09). Ver `AWS-RUNBOOK.md` sección 5. Mitigado parcialmente con persistencia en EFS desde Sprint 5 (las instancias nuevas heredan el cert sin reinstalar certbot). |
+| GLPI redirige a `/glpi` y da 404 | ✅ RESUELTO | Sprint 5: el VirtualHost de Apache trae `RewriteRule ^/glpi/?(.*)$ /$1 [R=301,L]` que se reescribe en cada arranque (Paso 7 del `user_data/glpi_asg.sh.tpl`). |
 
 ---
 
@@ -293,6 +294,22 @@ El paso de SQL con comillas simples a través del array `commands` de SSM es pro
 ```bash
 echo "<sql_en_base64>" | base64 -d | mysql -h $RDS -u $USER -p$PASS $DB
 ```
+
+### Sprint 5 — Autoescalado, redirect `/glpi` y persistencia del cert (2026-05-18)
+
+**Objetivo:** cerrar los flecos operativos pendientes tras Sprint 4.
+
+**Cambios principales:**
+
+- **Política de autoescalado por CPU.** Se ha añadido un `aws_autoscaling_policy` tipo `TargetTrackingScaling` al ASG con target del 60 % sobre `ASGAverageCPUUtilization`. AWS crea las alarmas CloudWatch internas automáticamente; no hace falta declararlas. El target del 60 % deja margen para absorber el pico mientras arranca la siguiente instancia (~2 min con la AMI Packer).
+- **Redirect `/glpi` → `/` en Apache.** Algunos navegadores con caché del path antiguo (`https://dracs-glpi.duckdns.org/glpi`) recibían un 404. Se añade `RewriteRule ^/glpi/?(.*)$ /$1 [R=301,L]` al VirtualHost del `user_data` (Paso 7), que se reescribe en cada arranque para cubrir tanto instalaciones frescas como instancias desde la AMI Packer.
+- **Persistencia del cert TLS en EFS.** Sin esto, cada vez que el ASG reemplaza una instancia se pierde `/etc/letsencrypt` (vive en el disco efímero). El `user_data` ahora instala certbot y, si encuentra `/mnt/efs/letsencrypt/live/`, copia los ficheros a `/etc/letsencrypt`. Tras emitir/renovar manualmente el cert hay que sincronizarlo a EFS con `cp -a /etc/letsencrypt/. /mnt/efs/letsencrypt/` para que sobreviva al siguiente reemplazo.
+- **Consolidación de políticas de escalado.** Se intentó dividir las políticas en un fichero `autoscaling_policies.tf` con alarmas adicionales por request rate y unhealthy hosts, pero se revirtió por simplicidad: la política CPU sola es suficiente para el alcance del proyecto y vive en `glpi_scaling.tf` junto al resto del stack.
+- **Documentación reorganizada.** Se añade `INFRAESTRUCTURA.md` en la raíz como guía pedagógica de la infraestructura completa con referencias a cada fichero `.tf`. Se eliminan `EXPLICACION_INFRAESTRUCTURA.md` y `POST_DEPLOYMENT.md` (contenido obsoleto, integrado en el resto de docs).
+
+**Procedimiento para aplicar el redirect a instancias en ejecución (sin instance refresh):**
+
+El cambio en `user_data` solo afecta a instancias nuevas. Para parchear una instancia ya en marcha sin esperar al reemplazo, se puede usar `aws ssm send-command` codificando el nuevo VirtualHost en base64 (ver `AWS-RUNBOOK.md` sección 7).
 
 ### Documentación (2026-05-13)
 Generados 10 documentos en `docs/aws/` siguiendo el estilo de documentación del proyecto (tono narrativo, tablas, `> Nota:`, sección "Documentación relacionada"):

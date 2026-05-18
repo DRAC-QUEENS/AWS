@@ -11,7 +11,7 @@ Se han definido seis Security Groups que aplican el principio de mínimo acceso:
 | SG | Ingress | Egress |
 | --- | --- | --- |
 | `wireguard-dracs` | UDP:51820 desde 0.0.0.0/0 (handshake VPN); TCP:22 desde 10.8.0.0/24 (admin via VPN); todo desde 10.0.0.0/16 (forwarding intra-VPC) | Todo |
-| `nginx-dracs` | TCP:80/443 desde 0.0.0.0/0; TCP:22 desde 10.8.0.0/24 (admin via VPN) | Todo |
+| `nginx-dracs` | TCP:80 desde 10.8.0.0/24 (sólo desde el túnel VPN); TCP:22 desde 10.8.0.0/24 | Todo |
 | `alb-glpi-dracs` | TCP:80 y TCP:443 desde 0.0.0.0/0; TCP:80 desde `nginx-dracs` SG | Todo |
 | `glpi-dracs` | TCP:80 desde `alb-glpi-dracs` SG; todo desde 10.8.0.0/24, 192.168.1.0/24, 192.168.10.0/24, 192.168.20.0/24 (admin VPN + on-prem) | Todo |
 | `rds-glpi-dracs` | TCP:3306 sólo desde `glpi-dracs` SG | Todo |

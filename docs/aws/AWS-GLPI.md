@@ -8,17 +8,19 @@ El backend de GLPI se compone de un Auto Scaling Group (compute efímero), una b
 
 ---
 
-El Launch Template (`lt-glpi-dracs-...`) define cómo se fabrica cada instancia del ASG. Usa Ubuntu 24.04 LTS vanilla porque toda la configuración de GLPI vive en el `user_data` (más mantenible que una AMI custom que habría que rehacer cada vez que se actualiza GLPI).
+El Launch Template (`lt-glpi-dracs-...`) define cómo se fabrica cada instancia del ASG. Por defecto usa una AMI Packer (`var.glpi_ami_id`) con Ubuntu 24.04 + Apache + PHP 8.3 + GLPI 10.0.18 pre-instalados, que reduce el tiempo de arranque de ~10 min a ~2 min. Si la variable está vacía, el Launch Template cae a Ubuntu 24.04 LTS vanilla y el `user_data` instala todo desde cero como fallback.
 
 | Atributo | Valor |
 | --- | --- |
-| AMI | `data.aws_ami.ubuntu.id` (Ubuntu 24.04 LTS latest, `099720109477`) |
+| AMI | `var.glpi_ami_id != "" ? var.glpi_ami_id : data.aws_ami.ubuntu.id` (Packer o Ubuntu 24.04 LTS latest) |
 | Tipo | `t3.small` |
 | Key pair | `var.key_name` (en producción `dracs2`) |
 | Security Group | `glpi-dracs` |
 | IAM profile | `LabInstanceProfile` (habilita SSM Session Manager y acceso ACM para importar certs) |
 | Block device | `/dev/sda1` 20 GB gp3, encrypted |
 | User data | `templatefile("user_data/glpi_asg.sh.tpl", { rds_endpoint, db_password, efs_dns, glpi_public_url })` |
+
+> **Nota:** la AMI Packer se construye con la plantilla `packer/glpi.pkr.hcl` y hay que regenerarla cada vez que se actualice GLPI o las dependencias. El `user_data` es idempotente, así que la AMI no tiene que estar exactamente al día (los pasos extra se ejecutarán en el primer boot si hace falta).
 
 # 2. user_data idempotente
 
@@ -28,23 +30,40 @@ El script se ejecuta en el primer boot de cada instancia. Es completamente idemp
 
 **Pasos que ejecuta:**
 
-1. **Instala dependencias** — `apache2`, `nfs-common`, `mariadb-client`, todas las extensiones PHP que GLPI necesita (`php-mysql`, `php-curl`, `php-gd`, `php-intl`, `php-ldap`, `php-mbstring`, etc.).
+1. **Monta EFS en `/mnt/efs`** — ejecuta `mount -t nfs4 -o nfsvers=4.1,...` apuntando al DNS del EFS, pre-crea los subdirectorios que GLPI espera (`_cache`, `_cron`, `_dumps`, `_log`, `_lock`, `_sessions`, etc.) y persiste el mount en `/etc/fstab` (idempotente con `grep -q || echo`). Después crea symlinks `glpi/files → /mnt/efs/files` y `glpi/plugins → /mnt/efs/plugins` para que GLPI no note la diferencia.
 
-2. **Monta EFS** — crea `/var/www/html/glpi/files`, ejecuta `mount -t nfs4 -o nfsvers=4.1,...` apuntando al DNS del EFS, y persiste el mount en `/etc/fstab` con `grep -q ... || echo ...` (idempotente). Restaura ownership a `www-data`.
+2. **Instala certbot y restaura el cert desde EFS** — `apt-get install -y certbot python3-certbot-dns-duckdns`. Si `/mnt/efs/letsencrypt/live/` existe, copia los ficheros a `/etc/letsencrypt`. Esto garantiza que cada instancia nueva del ASG tenga el certificado disponible sin intervención manual; el cert se guarda manualmente en EFS la primera vez que se emite.
 
-3. **Descarga GLPI** — sólo si `/var/www/html/glpi/index.php` no existe. Descarga `glpi-10.0.18.tgz` de GitHub, lo extrae y ajusta permisos.
+3. **Instala dependencias (sólo si no están)** — `apache2`, `nfs-common`, `mariadb-client`, todas las extensiones PHP de GLPI (`php-mysql`, `php-curl`, `php-gd`, `php-intl`, `php-ldap`, `php-mbstring`, etc.). En instancias basadas en la AMI Packer este paso se salta.
 
-4. **Escribe `config_db.php`** — con el endpoint RDS, usuario y contraseña inyectados desde Terraform. Se reescribe en cada arranque para garantizar que apunta al RDS correcto (por si se ha rotado la pass).
+4. **Descarga GLPI (sólo si no está)** — `glpi-10.0.18.tgz` desde GitHub. En la AMI Packer ya viene incluido, así que este paso se salta.
 
-5. **Restaura `glpicrypt.key` desde EFS** — si `/var/www/html/glpi/files/_meta/config/glpicrypt.key` existe (porque la migración lo dejó allí), lo copia a `/var/www/html/glpi/config/glpicrypt.key`. Sin esta clave GLPI no puede descifrar las contraseñas guardadas en BD (LDAP, mail) y la auth contra el DC falla.
+5. **Escribe `config_db.php`** — con el endpoint RDS, usuario y contraseña inyectados desde Terraform. Se reescribe en cada arranque para garantizar que apunta al RDS correcto.
 
-6. **Inicializa BD o actualiza schema** — con un `flock` en EFS para que dos instancias arrancando en paralelo no entren en race condition:
+6. **Restaura `glpicrypt.key` desde EFS** — si `/mnt/efs/files/_meta/config/glpicrypt.key` existe, lo copia a `/var/www/html/glpi/config/glpicrypt.key`. Sin esta clave GLPI no puede descifrar las contraseñas guardadas en BD (LDAP, mail) y la auth contra el DC falla.
+
+7. **Inicializa BD si está vacía** — con un `flock` en EFS para evitar que dos instancias arrancando en paralelo ejecuten `db:install` a la vez:
    - Si la tabla `glpi_configs` no existe en RDS → `php bin/console db:install ...`
-   - Si ya existe → `php bin/console db:update --no-interaction --force` (idempotente: si schema actual, no-op; si antiguo, migra)
+   - Después fuerza `url_base` en BD con un `UPDATE glpi_configs SET value = '${glpi_public_url}' WHERE name = 'url_base'` (evita que un dump migrado herede el path antiguo).
 
-7. **Fuerza `url_base`** — `UPDATE glpi_configs SET value = '${glpi_public_url}' WHERE name = 'url_base'`. Evita que tras migrar un dump con `url_base` viejo, los redirects post-login lleven a `/glpi` y den 404.
+8. **Reescribe el VirtualHost de Apache** — siempre se ejecuta, sustituye el `glpi.conf` del Packer AMI por la versión definitiva:
 
-8. **Apache VirtualHost** — escribe `/etc/apache2/sites-available/glpi.conf` con `DocumentRoot /var/www/html/glpi` (modo legacy, no `/public`), habilita `mod_rewrite`, deshabilita el default, reinicia Apache.
+   ```apache
+   <VirtualHost *:80>
+       DocumentRoot /var/www/html/glpi
+
+       RewriteEngine On
+       RewriteRule ^/glpi/?(.*)$ /$1 [R=301,L]
+
+       <Directory /var/www/html/glpi>
+           Options FollowSymLinks
+           AllowOverride All
+           Require all granted
+       </Directory>
+   </VirtualHost>
+   ```
+
+   La `RewriteRule` redirige cualquier petición a `/glpi` o `/glpi/...` a la raíz `/`, evitando 404 cuando navegadores con caché vieja entran por el path antiguo. Después habilita `mod_rewrite`, deshabilita el default y reinicia Apache.
 
 > **Nota crítica sobre el DocumentRoot:** la documentación oficial moderna recomienda `DocumentRoot /var/www/html/glpi/public`, pero GLPI 10.0.18 hardcodea en su código PHP rutas tipo `public/lib/base.min.css`. Con DocumentRoot=`/public`, esa URL se traduce a `/var/www/html/glpi/public/public/lib/base.min.css` y da 404 (sin CSS, página rota). Con DocumentRoot=`/var/www/html/glpi` la URL resuelve correctamente a `/var/www/html/glpi/public/lib/base.min.css`. Las carpetas sensibles (`/config/`, `/files/`, `/install/`) ya traen `.htaccess` con `Require all denied`, por lo que no se exponen.
 
@@ -58,7 +77,7 @@ El script se ejecuta en el primer boot de cada instancia. Es completamente idemp
 | Atributo | Valor |
 | --- | --- |
 | Name | `asg-glpi-dracs` |
-| min / max / desired | `0` / `3` / `var.asg_desired` (default `1`) |
+| min / max / desired | `0` / `3` / `var.asg_desired` (default `2`, una por AZ) |
 | Subnets | `subnet-privada-a-dracs` + `subnet-privada-b-dracs` (multi-AZ) |
 | Launch Template | `aws_launch_template.glpi`, version = `latest` |
 | Target group | `tg-glpi-dracs` (el ALB lo gestiona) |
@@ -66,7 +85,29 @@ El script se ejecuta en el primer boot de cada instancia. Es completamente idemp
 | Grace period | 300 s (tiempo para que el `user_data` termine antes de que el ALB la marque unhealthy) |
 | `depends_on` | mount targets EFS (sin esto el ASG podría arrancar antes de que el EFS esté listo) |
 
-`min_size = 0` permite bajar a 0 durante mantenimiento (por ejemplo, durante la migración de datos antes de que RDS+EFS estuvieran poblados). En producción se mantiene `desired = 1` y se puede subir manualmente si hace falta más capacidad.
+`min_size = 0` permite bajar a 0 durante mantenimiento (por ejemplo, durante la migración de datos antes de que RDS+EFS estuvieran poblados). En producción se mantiene `desired = 2` (una instancia por AZ) y se puede subir manualmente si hace falta más capacidad — la política de autoescalado por CPU también puede levantar instancias automáticamente hasta el máximo.
+
+## 3.1 Política de autoescalado
+
+Junto al ASG se define una `aws_autoscaling_policy` de tipo `TargetTrackingScaling` sobre la métrica `ASGAverageCPUUtilization`:
+
+```hcl
+resource "aws_autoscaling_policy" "glpi_cpu" {
+  name                   = "asg-glpi-cpu-tracking"
+  autoscaling_group_name = aws_autoscaling_group.glpi.name
+  policy_type            = "TargetTrackingScaling"
+
+  target_tracking_configuration {
+    predefined_metric_specification {
+      predefined_metric_type = "ASGAverageCPUUtilization"
+    }
+    target_value     = 60.0
+    disable_scale_in = false
+  }
+}
+```
+
+El target del 60 % se eligió porque GLPI (PHP + Apache) empieza a degradarse por encima del 65-70 % de CPU. Con 60 % queda margen para absorber el pico mientras AWS lanza la siguiente instancia (~2 min con la AMI Packer). AWS crea y gestiona automáticamente las alarmas CloudWatch internas que disparan la política — no hay que declararlas.
 
 > **Nota sobre health_check_type = ELB:** con esta config, el ASG sustituye una instancia si **el ALB** la marca unhealthy, no solo si la EC2 deja de responder a nivel de hardware. Es lo que se quiere: si GLPI deja de responder por bug software, queremos que se sustituya.
 
@@ -97,25 +138,26 @@ EFS es el almacenamiento NFS compartido entre todas las instancias del ASG. Aloj
 
 | Atributo | Valor |
 | --- | --- |
-| Filesystem ID | `fs-0e3a12b50ac2f89b3` |
+| Filesystem ID | `fs-00891f16aba18e12b` |
 | Encryption | At rest activada |
-| DNS endpoint | `fs-0e3a12b50ac2f89b3.efs.us-east-1.amazonaws.com` |
+| DNS endpoint | `<fs-id>.efs.us-east-1.amazonaws.com` |
 | Mount targets | privada-a (10.0.2.x) + privada-b (10.0.4.x), cada uno con su ENI |
 | Security Group | `efs-glpi-dracs` (puerto 2049 sólo desde `glpi-dracs` SG) |
-| Punto de montaje | `/var/www/html/glpi/files` en cada instancia |
+| Punto de montaje | `/mnt/efs` en cada instancia (con symlinks a `glpi/files` y `glpi/plugins`) |
 
 **Estructura del filesystem:**
 
 ```
-/                           ← raíz del EFS
-├── (uploads GLPI)
-├── _meta/
-│   └── config/
-│       ├── glpicrypt.key   ← clave de cifrado de GLPI (migrada)
-│       └── (otros configs de la instalación original)
-└── _cache/
-    └── (caché de templates Twig)
+/                            ← raíz del EFS (montada en /mnt/efs)
+├── files/                   ← uploads, logs, sesiones, caché de GLPI
+│   └── _meta/config/
+│       └── glpicrypt.key    ← clave de cifrado de GLPI (migrada)
+├── plugins/                 ← plugins instalados (compartidos entre instancias)
+└── letsencrypt/             ← cert TLS persistido para que sobreviva al reemplazo del ASG
+    └── live/dracs-glpi/
 ```
+
+> **Nota:** desde Sprint 4 el filesystem se monta en `/mnt/efs` (raíz limpia) y desde ahí se hacen symlinks a `/var/www/html/glpi/files` y `/var/www/html/glpi/plugins`. Esto permite tener también los plugins compartidos entre instancias, y aloja directorios auxiliares (como `letsencrypt/`) que no son parte de GLPI.
 
 > **Nota:** `_meta/config/glpicrypt.key` se puso ahí durante la migración (ver punto 6). El `user_data` la restaura a `/var/www/html/glpi/config/` en cada instancia del ASG, porque la carpeta `config/` está fuera del DocumentRoot accesible y, además, vive en el disco efímero de cada instancia.
 

@@ -53,11 +53,11 @@ Infraestructura AWS del proyecto DRACS (ASIX2). Arquitectura híbrida con VPN Wi
 - IP forwarding + iptables NAT/FORWARD aplicados via user_data
 - Script: `user_data/wireguard.sh.tpl`
 
-### Nginx — Reverse Proxy interno
-- EC2 t3.micro, subnet pública, IP fija 10.0.1.20, EIP
-- Sirve el tráfico interno (vía VPN) hacia el ALB en HTTPS
-- SSL auto-firmado (sólo se usa desde VPN; el FQDN público usa el cert ACM del ALB)
-- Script: `user_data/nginx.sh.tpl` (el DNS del ALB se inyecta en `terraform apply`)
+### Nginx — Redirector HTTP interno
+- EC2 t3.micro, subnet pública, IP fija 10.0.1.20 (sin EIP desde Sprint 4)
+- Único bloque `server` Nginx que hace `return 301 ${glpi_url}$request_uri` al dominio público
+- No termina TLS ni hace `proxy_pass` — el cert público del ALB sirve a todos los usuarios, incluso los que entran por VPN
+- Script: `user_data/nginx.sh.tpl` (la URL pública se inyecta en `terraform apply`)
 
 ### NLB — IP fija para DuckDNS
 - Network Load Balancer con Elastic IP estática
@@ -72,16 +72,23 @@ Infraestructura AWS del proyecto DRACS (ASIX2). Arquitectura híbrida con VPN Wi
 - Distribuye tráfico entre instancias del ASG
 
 ### GLPI — Auto Scaling Group (2 AZs)
-- Launch Template: t3.small, **Ubuntu 24.04 LTS vanilla** (el user_data instala GLPI desde cero)
-- ASG: min=0, max=3, desired=`var.asg_desired` (default 1)
+- Launch Template: t3.small. AMI: `var.glpi_ami_id` (Packer pre-instalado) o Ubuntu 24.04 LTS vanilla si está vacía
+- ASG: min=0, max=3, desired=`var.asg_desired` (default 2, una por AZ)
 - IAM profile: `LabInstanceProfile` (AWS Academy) → habilita SSM Session Manager
 - Script: `user_data/glpi_asg.sh.tpl`
-- Instancias **sin estado**: BD en RDS, ficheros en EFS
+- Instancias **sin estado**: BD en RDS, ficheros en EFS (`/mnt/efs` con symlinks a `glpi/files` y `glpi/plugins`)
 - El user_data es idempotente y reaplica en cada arranque:
+  - Restauración del cert `/etc/letsencrypt` desde EFS si existe (sobrevive a reemplazos del ASG)
   - `config_db.php` apuntando a RDS
   - Restauración de `glpicrypt.key` desde EFS si existe (sin él GLPI no descifra datos sensibles)
   - `db:install` si BD vacía, `db:update` si schema antiguo
-  - Forzado de `url_base` en BD a `var.glpi_public_url`
+  - VirtualHost Apache reescrito en cada arranque con `RewriteRule ^/glpi/?(.*)$ /$1 [R=301,L]` para evitar 404 en navegadores con caché del path antiguo
+
+### Política de autoescalado
+- `aws_autoscaling_policy` tipo `TargetTrackingScaling`
+- Métrica: `ASGAverageCPUUtilization`
+- Target value: 60 % de CPU
+- AWS crea y gestiona las alarmas CloudWatch internas automáticamente
 
 ### RDS — MariaDB 10.11
 - db.t3.micro, 20 GB gp3, cifrado en reposo
@@ -106,7 +113,7 @@ Infraestructura AWS del proyecto DRACS (ASIX2). Arquitectura híbrida con VPN Wi
 | SG | Ingress | Egress |
 |----|---------|--------|
 | `wireguard-dracs` | UDP:51820 (0.0.0.0/0), TCP:22 (VPN 10.8.0.0/24), todo desde VPC (10.0.0.0/16) | Todo |
-| `nginx-dracs` | TCP:80/443 (0.0.0.0/0), TCP:22 (VPN) | Todo |
+| `nginx-dracs` | TCP:80 desde 10.8.0.0/24 (VPN), TCP:22 desde 10.8.0.0/24 | Todo |
 | `alb-glpi-dracs` | TCP:80 y TCP:443 (0.0.0.0/0), TCP:80 desde nginx SG | Todo |
 | `glpi-dracs` | TCP:80 desde alb SG, todo desde VPN + on-prem (10.8.0/24, 192.168.1/24, 192.168.10/24, 192.168.20/24) | Todo |
 | `rds-glpi-dracs` | TCP:3306 desde glpi SG | Todo |
@@ -117,18 +124,20 @@ Infraestructura AWS del proyecto DRACS (ASIX2). Arquitectura híbrida con VPN Wi
 ```
 .
 ├── provider.tf         → AWS provider + backend S3 (comentado hasta bootstrap)
-├── variables.tf        → región, key_name, AMIs, asg_desired, contraseñas y claves WG
-├── network.tf          → VPC, 4 subnets (2 AZs), NAT, IGW, rutas on-prem via WG ENI
+├── variables.tf        → región, key_name, glpi_ami_id, asg_desired, contraseña RDS, claves WG
+├── network.tf          → VPC, 4 subnets (2 AZs), IGW, NAT, route tables, rutas on-prem via WG ENI
 ├── security.tf         → 6 security groups
-├── instances.tf        → WireGuard + Nginx EC2 (AMIs custom o Ubuntu vanilla)
-├── glpi_scaling.tf     → EFS, RDS, ALB (HTTP+HTTPS), NLB, Launch Template, ASG
+├── instances.tf        → WireGuard + Nginx EC2 (Ubuntu 24.04 LTS)
+├── glpi_scaling.tf     → EFS, RDS, ALB (HTTP+HTTPS), NLB, Launch Template, ASG, política autoescalado CPU
 ├── backend.tf          → S3 (tfstate) + DynamoDB (lock)
-├── backups.tf          → S3 (backups app) + AMI snapshots WireGuard/Nginx
+├── backups.tf          → S3 de backups de aplicación (lifecycle Glacier 30d → expiración 365d)
 ├── outputs.tf          → IPs, DNS, endpoints
+├── packer/
+│   └── glpi.pkr.hcl    → Plantilla Packer para AMI con GLPI pre-instalado
 └── user_data/
     ├── wireguard.sh.tpl   → Instala WireGuard, IP forwarding, iptables NAT
-    ├── nginx.sh.tpl       → Nginx → proxy HTTPS al ALB (DNS inyectado por Terraform)
-    └── glpi_asg.sh.tpl    → GLPI contra RDS + EFS, restaura glpicrypt.key, fuerza url_base
+    ├── nginx.sh.tpl       → Nginx con un único 301 al dominio público
+    └── glpi_asg.sh.tpl    → GLPI contra RDS + EFS, certbot, RewriteRule /glpi → /
 ```
 
 ## Variables
@@ -137,15 +146,13 @@ Infraestructura AWS del proyecto DRACS (ASIX2). Arquitectura híbrida con VPN Wi
 |----------|---------|-------------|
 | `region` | `us-east-1` | Región AWS |
 | `key_name` | `dracs-keypair` | Key pair EC2 (debe existir en la cuenta). En la cuenta nueva usamos `dracs2` vía tfvars |
-| `wireguard_ami_id` | `""` | AMI custom de WireGuard (migración). Vacío = Ubuntu 24.04 LTS latest |
-| `nginx_ami_id` | `""` | AMI custom de Nginx (migración). Vacío = Ubuntu 24.04 LTS latest |
-| `asg_desired` | `1` | Instancias deseadas en el ASG. Bajar a 0 durante migración de datos a RDS+EFS |
+| `glpi_ami_id` | `""` | AMI Packer con GLPI pre-instalado. Vacío = Ubuntu 24.04 LTS latest |
+| `asg_desired` | `2` | Instancias deseadas en el ASG (una por AZ). Bajar a 0 durante mantenimiento |
 | `glpi_public_url` | `https://dracs-glpi.duckdns.org` | URL pública; se fuerza en `glpi_configs.url_base` cada arranque |
 | `glpi_db_password` | *(requerida)* | Contraseña de la BD RDS de GLPI |
 | `wg_aws_private_key` | *(requerida)* | WireGuard private key del gateway AWS |
 | `wg_opnsense_public_key` | *(requerida)* | WireGuard public key del peer OPNsense |
 | `wg_preshared_key` | *(requerida)* | WireGuard preshared key (PSK) del túnel |
-| `create_ami_backup` | `false` | Crear AMI snapshots de WireGuard y Nginx |
 
 ### Gestionar secretos sin pasarlos en CLI
 
@@ -240,6 +247,7 @@ terraform output nginx_ip_publica
 ### Después de login GLPI redirige a /glpi y da 404
 - El `url_base` en BD aún tiene el path antiguo. El user_data lo arregla en cada boot, pero si se acaba de importar un dump puede pasar.
 - Manual: `UPDATE glpi_configs SET value = 'https://dracs-glpi.duckdns.org' WHERE name = 'url_base';`
+- Mitigación adicional: el VirtualHost de Apache trae `RewriteRule ^/glpi/?(.*)$ /$1 [R=301,L]`, que redirige cualquier petición a `/glpi` a la raíz. Si el fix no aplica en una instancia ya corriendo (porque el cambio en `user_data` solo afecta a instancias nuevas), recargar el VirtualHost vía SSM o lanzar un instance refresh del ASG.
 
 ### Asset CSS no carga (página sin estilos)
 - Apache vhost debe tener `DocumentRoot /var/www/html/glpi` (modo legacy GLPI 10), NO `/var/www/html/glpi/public`. GLPI 10.0.x hardcodea `public/lib/...` en las URLs
@@ -264,9 +272,11 @@ terraform output nginx_ip_publica
 - [x] RDS MariaDB (BD fuera del ASG)
 - [x] EFS para ficheros compartidos
 - [x] NLB con EIP fija (para DuckDNS)
-- [x] AMI parametrizable para migración entre cuentas (WG y Nginx)
 - [x] HTTPS en ALB (cert Let's Encrypt vía certbot + DuckDNS + ACM)
-- [ ] Renovación automatizada del cert TLS (cron + persistencia en EFS + re-import a ACM)
+- [x] AMI Packer con GLPI pre-instalado (tiempo de arranque ~2 min)
+- [x] Política de autoescalado por CPU (Target Tracking 60 %)
+- [x] Persistencia del cert TLS en EFS y restore automático en cada instancia nueva
+- [ ] Renovación automatizada del cert TLS (cron + re-import a ACM)
 - [ ] VPC Flow Logs para observabilidad
 - [ ] Route53 Privado para DNS interno
 - [ ] CloudWatch Alarms (CPU, RDS connections, ALB 5xx)

@@ -137,9 +137,9 @@ AWS_PROFILE=dracs-new terraform apply -auto-approve
 
 ## 6.1 Tras login, GLPI redirige a `/glpi` y da 404
 
-El `url_base` en la BD está apuntando al path de la cuenta vieja (legacy `/glpi`). El `user_data` lo arregla en cada arranque, pero si se ha re-importado un dump puede volver a aparecer.
+Dos causas posibles:
 
-**Fix manual** (vía SSM en la instancia GLPI):
+**a) `url_base` en la BD apunta al path antiguo (legacy `/glpi`).** El `user_data` lo arregla en cada arranque, pero si se ha re-importado un dump puede volver a aparecer.
 
 ```bash
 mysql -h rds-glpi-dracs.capsrvyl1db1.us-east-1.rds.amazonaws.com \
@@ -151,6 +151,15 @@ mysql -h rds-glpi-dracs.capsrvyl1db1.us-east-1.rds.amazonaws.com \
 "
 cd /var/www/html/glpi && php bin/console cache:clear --no-interaction
 ```
+
+**b) Navegador con caché del path antiguo.** Aunque el `url_base` esté correcto, navegadores que visitaron antes la URL `/glpi` pueden tener cacheado un redirect 301 que les lleva ahí. El VirtualHost de Apache trae una `RewriteRule` para devolver un 301 al path raíz:
+
+```apache
+RewriteEngine On
+RewriteRule ^/glpi/?(.*)$ /$1 [R=301,L]
+```
+
+Esta regla se aplica en cada arranque del ASG. Si una instancia ya en ejecución no la tiene (por ejemplo, porque el `user_data` se cambió después de lanzarla), se puede aplicar en caliente vía SSM sin esperar al instance refresh (ver sección 7).
 
 ## 6.2 GLPI carga sin estilos (CSS roto)
 
@@ -237,7 +246,47 @@ shutdown -h now
 
 Luego reemplazar la instancia ASG (punto 3) para que el `user_data` la coja.
 
-# 7. Documentación relacionada
+# 7. Parchear una instancia del ASG sin reemplazarla (SSM)
+
+---
+
+Cuando hace falta aplicar un cambio en una instancia ya en ejecución sin esperar a un instance refresh (porque la sustitución implica downtime o porque la launch template todavía no está actualizada en AWS), se puede usar `aws ssm send-command` para ejecutar el cambio directamente:
+
+```bash
+GLPI=$(aws autoscaling describe-auto-scaling-groups \
+  --auto-scaling-group-names asg-glpi-dracs \
+  --query 'AutoScalingGroups[0].Instances[0].InstanceId' --output text)
+
+CONFIG_B64=$(cat << 'HEREDOC' | base64 -w0
+<VirtualHost *:80>
+    DocumentRoot /var/www/html/glpi
+
+    RewriteEngine On
+    RewriteRule ^/glpi/?(.*)$ /$1 [R=301,L]
+
+    <Directory /var/www/html/glpi>
+        Options FollowSymLinks
+        AllowOverride All
+        Require all granted
+    </Directory>
+</VirtualHost>
+HEREDOC
+)
+
+aws ssm send-command \
+  --instance-ids "$GLPI" \
+  --document-name "AWS-RunShellScript" \
+  --parameters "{\"commands\":[
+     \"echo $CONFIG_B64 | base64 -d > /etc/apache2/sites-available/glpi.conf\",
+     \"apache2ctl configtest && systemctl reload apache2\"
+   ]}"
+```
+
+> **Nota sobre quoting:** pasar contenido multilínea con caracteres especiales (`$1`, comillas) a través del array `commands` de SSM es propenso a bugs. La técnica recomendada es codificar el contenido en base64 localmente y decodificarlo en el comando, como en el ejemplo.
+
+Este parche dura hasta que se reemplace la instancia. Si se quiere persistir el cambio para futuras instancias hay que aplicarlo también en `user_data/glpi_asg.sh.tpl` y hacer `terraform apply` para que la launch template lo recoja.
+
+# 8. Documentación relacionada
 
 ---
 
