@@ -261,8 +261,8 @@ resource "aws_launch_template" "glpi" {
 
 resource "aws_autoscaling_group" "glpi" {
   name                = "asg-glpi-dracs"
-  min_size            = 0
-  max_size            = 3
+  min_size            = 2
+  max_size            = 4
   desired_capacity    = var.asg_desired
   vpc_zone_identifier = [aws_subnet.private.id, aws_subnet.private_b.id]
 

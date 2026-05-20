@@ -40,18 +40,18 @@ resource "aws_security_group" "nginx" {
   vpc_id = aws_vpc.main.id
 
   ingress {
-    description = "HTTP desde el tunel WireGuard"
+    description = "HTTP desde el tunel WireGuard y redes on-prem"
     from_port   = 80
     to_port     = 80
     protocol    = "tcp"
-    cidr_blocks = ["10.8.0.0/24"]
+    cidr_blocks = ["10.8.0.0/24", "192.168.1.0/24", "192.168.10.0/24", "192.168.20.0/24"]
   }
   ingress {
-    description = "SSH solo desde el tunel VPN"
+    description = "SSH desde el tunel VPN y redes on-prem"
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
-    cidr_blocks = ["10.8.0.0/24"]
+    cidr_blocks = ["10.8.0.0/24", "192.168.1.0/24", "192.168.10.0/24", "192.168.20.0/24"]
   }
   egress {
     from_port   = 0
