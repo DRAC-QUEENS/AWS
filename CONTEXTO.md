@@ -1,6 +1,6 @@
 # DRACS — Contexto de infraestructura AWS
 
-> Actualizado: 2026-05-18  
+> Actualizado: 2026-05-20  
 > Cuenta activa: **123561366922** (la nueva)  
 > Cuenta antigua desactivada: 947411159788
 
@@ -294,6 +294,18 @@ El paso de SQL con comillas simples a través del array `commands` de SSM es pro
 ```bash
 echo "<sql_en_base64>" | base64 -d | mysql -h $RDS -u $USER -p$PASS $DB
 ```
+
+### Sprint 6 — Hardening pre-presentación e inventario dinámico Ansible (2026-05-20)
+
+**Objetivo:** Resolver problemas operativos detectados en pruebas previas a la presentación y dejar Ansible preparado para gestionar instancias efímeras del ASG.
+
+**Cambios principales:**
+
+- **`min_size = 2` en el ASG (antes `1`).** Target Tracking crea dos alarmas: `AlarmHigh` (scale-out) y `AlarmLow` (scale-in). Con CPU casi en cero en reposo, `AlarmLow` está siempre en `ALARM` y reducía el ASG a 1 instancia, rompiendo la HA por AZ. Subir `min_size` a 2 bloquea ese scale-in. La alarma sigue en `ALARM` pero ya no consigue su objetivo — comportamiento esperado y seguro. `max_size` pasa de 3 a 4 para dejar más margen al scale-out.
+- **`sg-nginx-dracs` admite redes on-prem.** Antes solo permitía SSH y HTTP desde `10.8.0.0/24` (túnel WG). Se añaden los tres CIDRs on-prem (`192.168.1/24`, `192.168.10/24`, `192.168.20/24`) para que Ansible y administración directa desde la LAN puedan llegar al redirector sin pasar por el túnel WG. El SG del ALB ya tenía los CIDRs; era inconsistencia heredada de Sprint 3.
+- **Rutas `aws_route.onprem_*` restauradas.** Las rutas `192.168.x.x → ENI del WG` en `rt-publica-dracs` y `rt-privada-dracs` habían desaparecido (probablemente por un `terraform apply` previo con `network.tf` parcial durante un episodio de archivos modificados localmente). Restauradas con `terraform apply -target=aws_route.onprem_*`.
+- **Inventario dinámico Ansible para el ASG.** El playbook `05-aws-wazuh-agent.yml` (y `04-aws-zabbix-agent.yml`) usaban una IP hardcodeada (`10.0.4.175`) que no existía. Se introduce el plugin `amazon.aws.aws_ec2` en `inventory/aws_ec2.yml` filtrando por `tag:aws:autoscaling:groupName=asg-glpi-dracs`. Las playbooks ahora apuntan al grupo dinámico `asg_asg_glpi_dracs` y al ASG real (2-4 instancias) sin tocar inventario. El nombre del agente Wazuh/Zabbix pasa a usar `instance_id` para que sea estable entre reemplazos. Cambios en el server Ansible (`192.168.10.50:/home/ansible/ansible-dracs/`), no en este repo.
+- **Runbook `docs/aws/AWS-STRESS-TEST.md`.** Procedimiento manual para validar la política Target Tracking generando carga HTTP externa contra el ALB. Verificado: con concurrencia moderada (~30 conexiones) la CPU media del ASG sube sin matar Apache.
 
 ### Sprint 5 — Autoescalado, redirect `/glpi` y persistencia del cert (2026-05-18)
 

@@ -73,7 +73,7 @@ Infraestructura AWS del proyecto DRACS (ASIX2). Arquitectura híbrida con VPN Wi
 
 ### GLPI — Auto Scaling Group (2 AZs)
 - Launch Template: t3.small. AMI: `var.glpi_ami_id` (Packer pre-instalado) o Ubuntu 24.04 LTS vanilla si está vacía
-- ASG: min=0, max=3, desired=`var.asg_desired` (default 2, una por AZ)
+- ASG: min=2, max=4, desired=`var.asg_desired` (default 2, una por AZ). `min=2` impide que la alarma de scale-in baje del par HA.
 - IAM profile: `LabInstanceProfile` (AWS Academy) → habilita SSM Session Manager
 - Script: `user_data/glpi_asg.sh.tpl`
 - Instancias **sin estado**: BD en RDS, ficheros en EFS (`/mnt/efs` con symlinks a `glpi/files` y `glpi/plugins`)
@@ -113,7 +113,7 @@ Infraestructura AWS del proyecto DRACS (ASIX2). Arquitectura híbrida con VPN Wi
 | SG | Ingress | Egress |
 |----|---------|--------|
 | `wireguard-dracs` | UDP:51820 (0.0.0.0/0), TCP:22 (VPN 10.8.0.0/24), todo desde VPC (10.0.0.0/16) | Todo |
-| `nginx-dracs` | TCP:80 desde 10.8.0.0/24 (VPN), TCP:22 desde 10.8.0.0/24 | Todo |
+| `nginx-dracs` | TCP:80 y TCP:22 desde 10.8.0.0/24 (VPN) y desde las VLANs on-prem (192.168.1/24, 192.168.10/24, 192.168.20/24) | Todo |
 | `alb-glpi-dracs` | TCP:80 y TCP:443 (0.0.0.0/0), TCP:80 desde nginx SG | Todo |
 | `glpi-dracs` | TCP:80 desde alb SG, todo desde VPN + on-prem (10.8.0/24, 192.168.1/24, 192.168.10/24, 192.168.20/24) | Todo |
 | `rds-glpi-dracs` | TCP:3306 desde glpi SG | Todo |

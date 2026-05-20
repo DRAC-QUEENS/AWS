@@ -85,7 +85,7 @@ El script se ejecuta en el primer boot de cada instancia. Es completamente idemp
 | Grace period | 300 s (tiempo para que el `user_data` termine antes de que el ALB la marque unhealthy) |
 | `depends_on` | mount targets EFS (sin esto el ASG podría arrancar antes de que el EFS esté listo) |
 
-`min_size = 0` permite bajar a 0 durante mantenimiento (por ejemplo, durante la migración de datos antes de que RDS+EFS estuvieran poblados). En producción se mantiene `desired = 2` (una instancia por AZ) y se puede subir manualmente si hace falta más capacidad — la política de autoescalado por CPU también puede levantar instancias automáticamente hasta el máximo.
+`min_size = 2` garantiza que el par HA (una instancia por AZ) no baje aunque la alarma de scale-in de Target Tracking lo pida. Para mantenimiento agresivo (bajar a 0 o a 1) hay que reducir temporalmente `min_size` en Terraform — un `set-desired-capacity 0` por sí solo no funciona porque AWS lo cap-ea al `min_size`. La política de autoescalado por CPU levanta instancias automáticamente hasta `max_size = 4`.
 
 ## 3.1 Política de autoescalado
 

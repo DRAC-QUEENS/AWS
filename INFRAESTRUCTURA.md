@@ -205,7 +205,7 @@ acceso: cada capa solo acepta tráfico de la capa inmediatamente anterior.
 | Security Group | Ingress | Egress |
 | --- | --- | --- |
 | `sg-wireguard-dracs` | UDP:51820 desde internet; TCP:22 desde 10.8.0.0/24; todo desde 10.0.0.0/16 | Todo |
-| `sg-nginx-dracs` | TCP:80 desde 10.8.0.0/24 (VPN); TCP:22 desde VPN | Todo |
+| `sg-nginx-dracs` | TCP:80 y TCP:22 desde 10.8.0.0/24 (VPN) y desde las redes on-prem (192.168.1/24, 192.168.10/24, 192.168.20/24) | Todo |
 | `sg-alb-glpi-dracs` | TCP:80/443 desde 0.0.0.0/0; TCP:80 desde nginx SG | Todo |
 | `sg-glpi-dracs` | TCP:80 desde ALB SG; todo desde redes VPN+on-prem; todo desde nginx SG | Todo |
 | `sg-rds-glpi-dracs` | TCP:3306 sólo desde glpi SG | Todo |
@@ -540,9 +540,12 @@ Pasos:
 | Health check type | `ELB` (usa el resultado del health check del ALB) |
 | Grace period | 300 s |
 
-Tener `min=0` permite bajar todo a cero durante el mantenimiento sin destruir
-la infraestructura. `desired=2` significa una instancia por AZ en operación
-normal.
+`min=2` garantiza que siempre haya dos instancias activas (una por AZ) para
+mantener HA real, incluso cuando la alarma de scale-in de Target Tracking
+intenta reducir el ASG por CPU baja en reposo. Para bajar el ASG durante
+mantenimiento hay que reducir temporalmente `min_size` (no basta con bajar
+`desired_capacity`, ya que se cap-ea al `min_size`). `max=4` permite escalar
+hasta el doble del par HA cuando la política de CPU dispara.
 
 > **Nota sobre `health_check_type = ELB`:** con esta configuración el ASG
 > sustituye una instancia si **el ALB** la marca unhealthy, no solo si la EC2
@@ -587,9 +590,10 @@ Funcionamiento:
 - AWS monitoriza automáticamente la métrica `ASGAverageCPUUtilization` (no hace
   falta CloudWatch Agent ni configuración extra).
 - Si la CPU media supera el 60 % de forma sostenida, el ASG lanza una instancia
-  adicional (hasta `max_size = 3`).
-- Si la CPU lleva tiempo por debajo, el ASG termina instancias (hasta
-  `min_size = 0`, aunque `desired = 2` lo mantiene en dos).
+  adicional (hasta `max_size = 4`).
+- Si la CPU lleva tiempo por debajo, la alarma `AlarmLow` dispara pero el ASG
+  no puede bajar de `min_size = 2`, por lo que la alarma queda permanentemente
+  en estado `ALARM` en reposo (comportamiento esperado, no es un fallo).
 - AWS crea y gestiona las alarmas CloudWatch internas asociadas
   automáticamente — no hace falta declararlas.
 
