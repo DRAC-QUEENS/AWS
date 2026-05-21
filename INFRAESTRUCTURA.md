@@ -290,7 +290,9 @@ El `user_data` (`user_data/nginx.sh.tpl`) escribe una única `server` block:
 server {
     listen 80;
     server_name _;
-    return 301 ${glpi_url}$request_uri;
+    # $uri (normalizado, merge_slashes on) en vez de $request_uri para que
+    # un cliente con "//" en el path no propague esos slashes al Location.
+    return 301 ${glpi_url}$uri$is_args$args;
 }
 ```
 

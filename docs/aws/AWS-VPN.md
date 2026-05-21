@@ -98,11 +98,13 @@ El script (`user_data/nginx.sh.tpl`) instala Nginx y escribe un único bloque `s
 server {
     listen 80;
     server_name _;
-    return 301 ${glpi_url}$request_uri;
+    # $uri (normalizado, merge_slashes on) en vez de $request_uri para que
+    # un cliente con "//" en el path no propague esos slashes al Location.
+    return 301 ${glpi_url}$uri$is_args$args;
 }
 ```
 
-`${glpi_url}` lo sustituye Terraform por el valor de `var.glpi_public_url` (por defecto `https://dracs-glpi.duckdns.org`). Cualquier petición HTTP que llegue al puerto 80 de Nginx se redirige al dominio público, donde el ALB termina TLS con el cert válido de Let's Encrypt.
+`${glpi_url}` lo sustituye Terraform por el valor de `var.glpi_public_url` (por defecto `https://dracs-glpi.duckdns.org`). Cualquier petición HTTP que llegue al puerto 80 de Nginx se redirige al dominio público, donde el ALB termina TLS con el cert válido de Let's Encrypt. La variable `$uri` (no `$request_uri`) garantiza que `merge_slashes on` colapse cualquier `//` antes de construir el `Location`.
 
 Acceso desde on-prem: `http://10.0.1.20/` (cualquier path). El navegador recibirá un 301 hacia `https://dracs-glpi.duckdns.org/<path>` y a partir de ahí el flujo es el mismo que el del tráfico público.
 

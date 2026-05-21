@@ -55,7 +55,7 @@ Infraestructura AWS del proyecto DRACS (ASIX2). Arquitectura híbrida con VPN Wi
 
 ### Nginx — Redirector HTTP interno
 - EC2 t3.micro, subnet pública, IP fija 10.0.1.20 (sin EIP desde Sprint 4)
-- Único bloque `server` Nginx que hace `return 301 ${glpi_url}$request_uri` al dominio público
+- Único bloque `server` Nginx que hace `return 301 ${glpi_url}$uri$is_args$args` al dominio público. Se usa `$uri` (normalizado, con `merge_slashes on`) en lugar de `$request_uri` para evitar que clientes con `//` en el path lo propaguen al `Location` del 301.
 - No termina TLS ni hace `proxy_pass` — el cert público del ALB sirve a todos los usuarios, incluso los que entran por VPN
 - Script: `user_data/nginx.sh.tpl` (la URL pública se inyecta en `terraform apply`)
 

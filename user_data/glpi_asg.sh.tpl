@@ -25,7 +25,18 @@ grep -q "/mnt/efs" /etc/fstab || echo "$EFS_DNS:/ /mnt/efs nfs4 nfsvers=4.1,rsiz
 for dir in _cache _cron _dumps _graphs _lock _log _maps _pictures _plugins _rss _sessions _tmp _uploads _meta/config; do
   mkdir -p "/mnt/efs/files/$dir"
 done
-chown -R www-data:www-data /mnt/efs/files /mnt/efs/plugins
+
+# chown idempotente y rapido sobre NFS: un chown -R recursivo se colgaba en D-state
+# horas por culpa de los miles de ficheros acumulados en _sessions (incidente previo).
+# Se excluyen los directorios ephemeral y solo se corrigen los ficheros mal-owned.
+chown www-data:www-data /mnt/efs/files /mnt/efs/plugins
+find /mnt/efs/files /mnt/efs/plugins \
+  -type d \( -name "_sessions" -o -name "_cache" -o -name "_tmp" -o -name "_log" -o -name "_dumps" -o -name "_cron" \) -prune \
+  -o -not -user www-data -exec chown www-data:www-data {} +
+
+# Limpieza preventiva de sesiones PHP > 1 dia para evitar que _sessions vuelva a crecer
+# sin control. Timeout corto: si hay demasiados ficheros, no bloqueamos el arranque.
+timeout 60 find /mnt/efs/files/_sessions -maxdepth 1 -type f -mtime +1 -delete 2>/dev/null || true
 
 # Enlazar los directorios EFS a las rutas que espera GLPI
 rm -rf /var/www/html/glpi/files /var/www/html/glpi/plugins

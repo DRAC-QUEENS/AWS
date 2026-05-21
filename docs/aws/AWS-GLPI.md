@@ -30,7 +30,7 @@ El script se ejecuta en el primer boot de cada instancia. Es completamente idemp
 
 **Pasos que ejecuta:**
 
-1. **Monta EFS en `/mnt/efs`** — ejecuta `mount -t nfs4 -o nfsvers=4.1,...` apuntando al DNS del EFS, pre-crea los subdirectorios que GLPI espera (`_cache`, `_cron`, `_dumps`, `_log`, `_lock`, `_sessions`, etc.) y persiste el mount en `/etc/fstab` (idempotente con `grep -q || echo`). Después crea symlinks `glpi/files → /mnt/efs/files` y `glpi/plugins → /mnt/efs/plugins` para que GLPI no note la diferencia.
+1. **Monta EFS en `/mnt/efs`** — ejecuta `mount -t nfs4 -o nfsvers=4.1,...` apuntando al DNS del EFS, pre-crea los subdirectorios que GLPI espera (`_cache`, `_cron`, `_dumps`, `_log`, `_lock`, `_sessions`, etc.) y persiste el mount en `/etc/fstab` (idempotente con `grep -q || echo`). Después crea symlinks `glpi/files → /mnt/efs/files` y `glpi/plugins → /mnt/efs/plugins` para que GLPI no note la diferencia. El `chown` de propietario `www-data` sobre el árbol se hace de forma **idempotente y selectiva** con `find -prune` excluyendo los directorios ephemeral (`_sessions`, `_cache`, `_tmp`, `_log`, `_dumps`, `_cron`); en arranques sucesivos no se vuelve a recorrer recursivamente. Además, se ejecuta una limpieza preventiva de sesiones PHP de más de un día (`find /mnt/efs/files/_sessions -maxdepth 1 -type f -mtime +1 -delete`) con `timeout 60s` para no bloquear el boot.
 
 2. **Instala certbot y restaura el cert desde EFS** — `apt-get install -y certbot python3-certbot-dns-duckdns`. Si `/mnt/efs/letsencrypt/live/` existe, copia los ficheros a `/etc/letsencrypt`. Esto garantiza que cada instancia nueva del ASG tenga el certificado disponible sin intervención manual; el cert se guarda manualmente en EFS la primera vez que se emite.
 

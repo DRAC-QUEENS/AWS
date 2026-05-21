@@ -1,6 +1,6 @@
 # DRACS — Contexto de infraestructura AWS
 
-> Actualizado: 2026-05-20  
+> Actualizado: 2026-05-21  
 > Cuenta activa: **123561366922** (la nueva)  
 > Cuenta antigua desactivada: 947411159788
 
@@ -295,7 +295,32 @@ El paso de SQL con comillas simples a través del array `commands` de SSM es pro
 echo "<sql_en_base64>" | base64 -d | mysql -h $RDS -u $USER -p$PASS $DB
 ```
 
-### Sprint 6 — Hardening pre-presentación e inventario dinámico Ansible (2026-05-20)
+### Sesión 2026-05-21 — Cuelgue por chown sobre EFS, redirect Nginx y route table drift
+
+**Objetivo:** desatascar el ASG, que llevaba horas en bucle de reemplazo, arreglar un bug latente del redirector Nginx y, finalmente, resolver de raíz el drift recurrente del route table que llevaba toda la semana provocando que las rutas on-prem desaparecieran.
+
+**Síntoma inicial:** endpoint público devolvía 502 sostenido. Las instancias del ASG arrancaban, se marcaban `Unhealthy` por el target group del ALB y el ASG las terminaba para lanzar otras, que caían igual.
+
+**Causa raíz:** el `user_data/glpi_asg.sh.tpl` ejecutaba `chown -R www-data:www-data /mnt/efs/files /mnt/efs/plugins` después de montar EFS. El directorio `_sessions` había acumulado **85 424 ficheros de sesión PHP** (335 MB sólo en entradas de directorio). El `chown -R` recursivo sobre NFS hace miles de RPCs `SETATTR` secuenciales y se bloqueaba en estado `D` (uninterruptible RPC) durante horas. Con `set -e` activo, el script nunca avanzaba al Paso 8 (`systemctl restart apache2`).
+
+**Fix aplicado:**
+
+- **`user_data/glpi_asg.sh.tpl`**: sustituido el `chown -R` por `chown` no-recursivo sobre los tops + `find ... -prune` excluyendo los directorios ephemeral (`_sessions`, `_cache`, `_tmp`, `_log`, `_dumps`, `_cron`) y aplicando chown sólo a entradas que aún no estén en `www-data`. Añadida limpieza preventiva: `timeout 60 find /mnt/efs/files/_sessions -maxdepth 1 -type f -mtime +1 -delete`.
+- **Limpieza única del EFS**: con `aws ssm send-command` desde una instancia de la ASG (con procesos `ReplaceUnhealthy`/`HealthCheck`/`Terminate` del ASG suspendidos para que no la matase mid-cleanup) se borraron 58 119 ficheros del `_sessions` con `find . -maxdepth 1 -type f -print0 | xargs -0 -P 8 -n 500 rm -f`. Resultado: 408 KB y 65 ficheros.
+- **Bug paralelo del Nginx**: el redirect usaba `return 301 ${glpi_url}$request_uri`, y `$request_uri` propaga el path original sin normalizar, incluyendo `//` si el cliente los mandaba. Cambiado a `return 301 ${glpi_url}$uri$is_args$args` para aprovechar `merge_slashes on` (default) y entregar el `Location` sin slashes duplicados. Verificado con curl desde dentro de la VPC (`/`, `//`, `///`, `/glpi//foo`, `/a/b/?q=1`) — todos devuelven Location con `/` simple y query string preservada.
+- **Reemplazo de la instancia Nginx**: `terraform apply -replace=aws_instance.nginx -auto-approve`, ya que cambios sólo en `user_data` no fuerzan replace por defecto.
+- **Instance refresh del ASG GLPI** con `MinHealthyPercentage=0` para que las nuevas instancias arrancasen con el `user_data` corregido.
+
+**Resultado:** HTTP público `200 OK`, target group con 2 GLPI `healthy`, redirect Nginx normalizado.
+
+**Lecciones operativas:**
+1. Nunca hacer `chown -R` sobre directorios NFS sin saber el orden de magnitud de su contenido. Cualquier operación recursiva sobre `_sessions`/`_cache` de GLPI es una bomba latente.
+2. Suspender `ReplaceUnhealthy` y `Terminate` del ASG antes de operaciones de cleanup que requieran SSM contra una instancia concreta — el ASG no esperará al chown ni al `rm` si el ALB la marca unhealthy.
+3. Para que un cambio en `user_data` de `aws_instance` (no de Launch Template) tenga efecto en una instancia ya viva, hay que pasarle `-replace=` al `terraform apply` o añadir `user_data_replace_on_change = true` al recurso.
+
+**Fix definitivo del drift del route table.** Causa raíz identificada: en `network.tf`, los recursos `aws_route_table.publica` y `aws_route_table.privada` declaran rutas inline en bloques `route { ... }`, y al mismo tiempo existen recursos `aws_route.onprem_*` separados para las rutas hacia las redes on-prem. Cuando se mezclan rutas inline con recursos `aws_route` sobre la misma route table, Terraform considera todo lo que no esté declarado inline como drift y lo elimina en cada apply. Solución: añadir `lifecycle { ignore_changes = [route] }` a los dos route tables. Tras el fix, `terraform plan` devuelve `No changes. Your infrastructure matches the configuration.` por primera vez en toda la semana. Ver `docs/aws/PROBLEMAS-INFRA.md` P-01 para el detalle.
+
+### Sesión 2026-05-20 — Hardening pre-presentación e inventario dinámico Ansible
 
 **Objetivo:** Resolver problemas operativos detectados en pruebas previas a la presentación y dejar Ansible preparado para gestionar instancias efímeras del ASG.
 

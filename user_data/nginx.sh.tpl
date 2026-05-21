@@ -11,7 +11,10 @@ cat > /etc/nginx/sites-available/glpi << 'NGINX_CONFIG'
 server {
     listen 80;
     server_name _;
-    return 301 ${glpi_url}$request_uri;
+    # Usar $uri (normalizado, con merge_slashes on) en lugar de $request_uri
+    # para evitar que un cliente que mande "//" en el path lo propague tal cual
+    # al Location del 301 (resultaba en "https://...duckdns.org//...").
+    return 301 ${glpi_url}$uri$is_args$args;
 }
 NGINX_CONFIG
 

@@ -81,6 +81,15 @@ resource "aws_route_table" "publica" {
     gateway_id = aws_internet_gateway.igw.id
   }
   tags = { Name = "rt-publica-dracs" }
+
+  # IMPORTANTE: ignoramos cambios en `route` porque las rutas hacia
+  # las redes on-prem se gestionan con recursos `aws_route` separados
+  # (`aws_route.onprem_public`). Sin este `ignore_changes`, en cada apply
+  # `aws_route_table` veria las rutas on-prem como drift y las borraria
+  # (anti-patron documentado de Terraform AWS provider).
+  lifecycle {
+    ignore_changes = [route]
+  }
 }
 
 resource "aws_route_table" "privada" {
@@ -90,6 +99,12 @@ resource "aws_route_table" "privada" {
     nat_gateway_id = aws_nat_gateway.nat.id
   }
   tags = { Name = "rt-privada-dracs" }
+
+  # Mismo motivo que en `publica`: las rutas on-prem (`aws_route.onprem_private`)
+  # se gestionan por separado y no deben ser tratadas como drift.
+  lifecycle {
+    ignore_changes = [route]
+  }
 }
 
 # ---------- ROUTE TABLE ASSOCIATIONS ----------

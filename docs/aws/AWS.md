@@ -103,14 +103,12 @@ Durante el despliegue surgieron varios escollos que dejaron huella en la configu
 
 ---
 
-La documentación de AWS se divide en los siguientes sub-artículos:
-
-* **AWS-RED.md** — VPC, subnets en 2 AZs, IGW, NAT y rutas (incluidas las rutas a on-prem via ENI del WireGuard)
-* **AWS-VPN.md** — EC2 WireGuard (gateway VPN site-to-site) y EC2 Nginx (reverse proxy interno para el tráfico desde on-prem)
-* **AWS-BALANCEO.md** — NLB, ALB, target groups, listeners y certificado TLS (certbot + ACM + DuckDNS)
-* **AWS-GLPI.md** — Auto Scaling Group + Launch Template, RDS MariaDB y EFS (el backend completo de GLPI)
-* **AWS-SEGURIDAD.md** — Security Groups, IAM, KMS y custodia de secretos
-* **AWS-TERRAFORM.md** — estructura del código IaC, variables, state remoto y procedimiento de migración entre cuentas
-* **AWS-RUNBOOK.md** — operativa: SSM, reemplazo de instancia ASG, renovación del cert, escalado y troubleshooting recurrente
-* **AWS-SIMPLE.md** — la arquitectura previa (monolítica, 1 AZ, GLPI standalone) que se desplegó primero y se sustituyó por la actual
-* **AWS-COSTES.md** — estimación de coste mensual de ambas arquitecturas y comparativa
+* G2-A-65 — VPC, subnets en 2 AZs, IGW, NAT y rutas (incluidas las rutas a on-prem via ENI del WireGuard)
+* G2-A-60 — EC2 WireGuard (gateway VPN site-to-site) y EC2 Nginx (reverse proxy interno para el tráfico desde on-prem)
+* G2-A-67 — NLB, ALB, target groups, listeners y certificado TLS (certbot + ACM + DuckDNS)
+* G2-A-66 — Auto Scaling Group + Launch Template, RDS MariaDB y EFS (el backend completo de GLPI)
+* G2-A-61 — Security Groups, IAM, KMS y custodia de secretos
+* G2-A-63 — estructura del código IaC, variables, state remoto y procedimiento de migración entre cuentas
+* G2-A-64 — operativa: SSM, reemplazo de instancia ASG, renovación del cert, escalado y troubleshooting recurrente
+* G2-A-62 — la arquitectura previa (monolítica, 1 AZ, GLPI standalone) que se desplegó primero y se sustituyó por la actual
+* G2-A-11 — estimación de coste mensual de ambas arquitecturas y comparativa
