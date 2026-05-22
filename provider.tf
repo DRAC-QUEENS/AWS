@@ -6,17 +6,15 @@ terraform {
     }
   }
 
-  # Backend remoto S3 + DynamoDB (ver backend.tf).
-  # Descomentar SOLO tras el primer `terraform apply` que crea el bucket
-  # y la tabla. Luego ejecutar:  terraform init -migrate-state
-  #
-  # backend "s3" {
-  #   bucket         = "dracs-tfstate-<ACCOUNT_ID>"
-  #   key            = "infra/terraform.tfstate"
-  #   region         = "us-east-1"
-  #   encrypt        = true
-  #   dynamodb_table = "dracs-tfstate-lock"
-  # }
+  # Backend remoto S3 con locking nativo (ver backend.tf).
+  # Bootstrap completado: bucket creado por el primer apply local.
+  backend "s3" {
+    bucket       = "dracs-tfstate-563771271989"
+    key          = "infra/terraform.tfstate"
+    region       = "us-east-1"
+    encrypt      = true
+    use_lockfile = true
+  }
 }
 
 provider "aws" {

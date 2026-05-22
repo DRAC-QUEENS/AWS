@@ -53,6 +53,13 @@ resource "aws_security_group" "nginx" {
     protocol    = "tcp"
     cidr_blocks = ["10.8.0.0/24", "192.168.1.0/24", "192.168.10.0/24", "192.168.20.0/24"]
   }
+  ingress {
+    description = "ICMP (ping) desde el tunel WireGuard y redes on-prem"
+    from_port   = -1
+    to_port     = -1
+    protocol    = "icmp"
+    cidr_blocks = ["10.8.0.0/24", "192.168.1.0/24", "192.168.10.0/24", "192.168.20.0/24"]
+  }
   egress {
     from_port   = 0
     to_port     = 0

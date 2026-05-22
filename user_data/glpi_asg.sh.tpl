@@ -11,6 +11,14 @@ GLPI_URL="${glpi_public_url}"
 
 echo "[$(date)] === GLPI ASG Instance Setup Started ==="
 
+# Paso 0: nfs-common es prerequisito para montar EFS. La AMI Packer ya lo trae,
+# pero Ubuntu vanilla (fallback cuando glpi_ami_id="") no, asi que el mount fallaria.
+if ! command -v mount.nfs4 &>/dev/null; then
+  echo "[$(date)] Instalando nfs-common (prerequisito para EFS)..."
+  apt-get update -qq
+  DEBIAN_FRONTEND=noninteractive apt-get install -yq nfs-common
+fi
+
 # Paso 1: Montar EFS en /mnt/efs y crear subdirectorios si no existen
 echo "[$(date)] Montando EFS..."
 mkdir -p /mnt/efs
@@ -38,27 +46,14 @@ find /mnt/efs/files /mnt/efs/plugins \
 # sin control. Timeout corto: si hay demasiados ficheros, no bloqueamos el arranque.
 timeout 60 find /mnt/efs/files/_sessions -maxdepth 1 -type f -mtime +1 -delete 2>/dev/null || true
 
-# Enlazar los directorios EFS a las rutas que espera GLPI
-rm -rf /var/www/html/glpi/files /var/www/html/glpi/plugins
-ln -s /mnt/efs/files   /var/www/html/glpi/files
-ln -s /mnt/efs/plugins /var/www/html/glpi/plugins
-echo "[✓] EFS montado y symlinks creados"
-
-# Certbot: instalar y restaurar cert desde EFS si existe
-apt-get install -y certbot python3-certbot-dns-duckdns 2>/dev/null || true
-if [ -d /mnt/efs/letsencrypt/live ]; then
-  cp -a /mnt/efs/letsencrypt/. /etc/letsencrypt/
-  echo "[✓] Certbot cert restaurado desde EFS"
-else
-  echo "[$(date)] Sin cert en EFS — se requiere emision manual con certbot"
-fi
-
-# Paso 2: Instalar paquetes si no están (en AMI Packer ya vienen instalados)
+# Paso 2: Instalar paquetes si no están (en AMI Packer ya vienen instalados).
+# Tiene que ir ANTES de los symlinks porque GLPI tiene que estar instalado para
+# que /var/www/html/glpi/ exista cuando reemplazamos files/ y plugins/ por symlinks.
 if ! command -v apache2 &>/dev/null; then
   echo "[$(date)] Instalando Apache, PHP y dependencias..."
-  apt-get update
+  apt-get update -qq
   DEBIAN_FRONTEND=noninteractive apt-get install -y \
-    apache2 nfs-common mariadb-client \
+    apache2 mariadb-client \
     php php-mysql php-curl php-gd php-intl php-ldap \
     php-mbstring php-xml php-xmlrpc php-zip php-bz2 php-imap php-apcu
   systemctl enable apache2
@@ -73,24 +68,23 @@ if [ ! -f /var/www/html/glpi/index.php ]; then
     "https://github.com/glpi-project/glpi/releases/download/$GLPI_VERSION/glpi-$GLPI_VERSION.tgz"
   tar -xzf "glpi-$GLPI_VERSION.tgz" -C /var/www/html/
   chown -R www-data:www-data /var/www/html/glpi
-
-  # VirtualHost Apache (el AMI Packer ya lo trae configurado)
-  cat > /etc/apache2/sites-available/glpi.conf << 'APACHE_CONF'
-<VirtualHost *:80>
-    DocumentRoot /var/www/html/glpi
-    <Directory /var/www/html/glpi>
-        Options FollowSymLinks
-        AllowOverride All
-        Require all granted
-    </Directory>
-    ErrorLog /var/log/apache2/glpi_error.log
-    CustomLog /var/log/apache2/glpi_access.log combined
-</VirtualHost>
-APACHE_CONF
-  a2ensite glpi.conf
-  a2dissite 000-default.conf
   a2enmod rewrite
   echo "[✓] GLPI instalado"
+fi
+
+# Enlazar los directorios EFS a las rutas que espera GLPI (tras instalar GLPI)
+rm -rf /var/www/html/glpi/files /var/www/html/glpi/plugins
+ln -s /mnt/efs/files   /var/www/html/glpi/files
+ln -s /mnt/efs/plugins /var/www/html/glpi/plugins
+echo "[✓] symlinks EFS → GLPI creados"
+
+# Certbot: instalar y restaurar cert desde EFS si existe
+apt-get install -y certbot python3-certbot-dns-duckdns 2>/dev/null || true
+if [ -d /mnt/efs/letsencrypt/live ]; then
+  cp -a /mnt/efs/letsencrypt/. /etc/letsencrypt/
+  echo "[✓] Certbot cert restaurado desde EFS"
+else
+  echo "[$(date)] Sin cert en EFS — se requiere emision manual con certbot"
 fi
 
 # Paso 4: config_db.php — se sobreescribe en cada arranque para garantizar que apunta al RDS correcto

@@ -44,9 +44,37 @@ cat > /etc/wireguard/wg0.conf << EOF
 Address = 10.8.0.2/24
 ListenPort = 51820
 PrivateKey = ${aws_private_key}
+# MTU 1420 estandar WireGuard sobre internet. El default heredado del ens5
+# (jumbo 9001 -> wg0=8921) anuncia un MSS demasiado grande y provoca perdida
+# silenciosa de paquetes TCP en el path hasta OPNsense.
+MTU = 1420
 
-PostUp   = iptables -A FORWARD -i wg0 -j ACCEPT; iptables -A FORWARD -o wg0 -j ACCEPT; iptables -t nat -A POSTROUTING -o $ETH ! -d 10.0.0.0/8 -j MASQUERADE
-PreDown  = iptables -D FORWARD -i wg0 -j ACCEPT; iptables -D FORWARD -o wg0 -j ACCEPT; iptables -t nat -D POSTROUTING -o $ETH ! -d 10.0.0.0/8 -j MASQUERADE
+# PostUp/PreDown:
+#  - FORWARD ACCEPT para wg0 (necesario para que el WG actue como router VPC<->on-prem)
+#  - MASQUERADE en \$ETH solo para destinos fuera de 10.0.0.0/8 (NAT a internet legacy)
+#  - SNAT del trafico GLPI->wg0 a 10.8.0.2: evita que las IPs dinamicas del ASG GLPI
+#    aparezcan en on-prem; el firewall del DC y los AllowedIPs de OPNsense solo
+#    tienen que aceptar 10.8.0.0/24, no toda la VPC. CRITICO: solo SNAT a las
+#    subnets privadas del ASG (10.0.2.0/24, 10.0.4.0/24). NO incluir 10.0.0.0/16
+#    porque romperia las respuestas del nginx (10.0.1.20) a pings desde on-prem
+#    (el on-prem espera respuesta de 10.0.1.20, no de 10.8.0.2).
+#  - MSS clamping en FORWARD wg0: ajusta el MSS de los SYN al PMTU real del tunnel,
+#    evitando que sesiones TCP iniciadas desde la VPC se queden colgadas al primer
+#    paquete grande (sintoma: nc -zw5 timeouts intermitentes).
+PostUp   = iptables -A FORWARD -i wg0 -j ACCEPT; \
+           iptables -A FORWARD -o wg0 -j ACCEPT; \
+           iptables -t nat -A POSTROUTING -o $ETH ! -d 10.0.0.0/8 -j MASQUERADE; \
+           iptables -t nat -A POSTROUTING -o wg0 -s 10.0.2.0/24 -j MASQUERADE; \
+           iptables -t nat -A POSTROUTING -o wg0 -s 10.0.4.0/24 -j MASQUERADE; \
+           iptables -t mangle -A FORWARD -o wg0 -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu; \
+           iptables -t mangle -A FORWARD -i wg0 -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
+PreDown  = iptables -D FORWARD -i wg0 -j ACCEPT; \
+           iptables -D FORWARD -o wg0 -j ACCEPT; \
+           iptables -t nat -D POSTROUTING -o $ETH ! -d 10.0.0.0/8 -j MASQUERADE; \
+           iptables -t nat -D POSTROUTING -o wg0 -s 10.0.2.0/24 -j MASQUERADE; \
+           iptables -t nat -D POSTROUTING -o wg0 -s 10.0.4.0/24 -j MASQUERADE; \
+           iptables -t mangle -D FORWARD -o wg0 -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu; \
+           iptables -t mangle -D FORWARD -i wg0 -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
 
 [Peer]
 PublicKey = ${opnsense_public_key}
