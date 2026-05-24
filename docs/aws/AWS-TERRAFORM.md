@@ -29,7 +29,7 @@ Toda la infraestructura está descrita como código en Terraform. El repo contie
 | Variable | Tipo | Default | Descripción |
 | --- | --- | --- | --- |
 | `region` | string | `us-east-1` | Región AWS |
-| `key_name` | string | `dracs-keypair` | Key pair EC2. En la cuenta actual usamos `dracs2` vía `tfvars` |
+| `key_name` | string | `dracs-keypair` | Key pair EC2. En la cuenta actual usamos `dracs3` vía `tfvars` |
 | `glpi_ami_id` | string | `""` | AMI Packer con GLPI pre-instalado. Vacío = Ubuntu 24.04 LTS latest |
 | `asg_desired` | number | `2` | `desired_capacity` del ASG (una instancia por AZ). Se baja a 0 durante mantenimiento |
 | `glpi_public_url` | string | `https://dracs-glpi.duckdns.org` | URL pública; se fuerza en `glpi_configs.url_base` en cada arranque del ASG |
@@ -41,8 +41,8 @@ Toda la infraestructura está descrita como código en Terraform. El repo contie
 Las variables marcadas `sensitive` no aparecen en logs ni outputs. Se pasan en `terraform.tfvars`:
 
 ```hcl
-key_name               = "dracs2"
-glpi_ami_id            = "ami-0f69b2f6a15d477e3"
+key_name               = "dracs3"
+glpi_ami_id            = "ami-0695c86f79f0e87b7"
 asg_desired            = 2
 glpi_db_password       = "<contraseña>"
 wg_aws_private_key     = "<key>"
@@ -104,7 +104,7 @@ El bucket tiene `lifecycle { prevent_destroy = true }` para que un `terraform de
 
 ---
 
-El procedimiento real seguido para migrar de `947411159788` a `123561366922` se documenta aquí porque está acoplado al código Terraform (AMIs custom, variables, asg_desired).
+Este procedimiento se ha aplicado dos veces: primero de `947411159788` → `123561366922` y después de `123561366922` → la cuenta actual `563771271989`. Se documenta aquí porque está acoplado al código Terraform (AMIs custom, variables, asg_desired). La segunda migración fue más simple porque RDS y EFS persisten entre sesiones de Academy y se reutilizaron presigned URLs cross-account en vez de KMS share.
 
 **Resumen del flujo:**
 

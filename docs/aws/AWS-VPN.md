@@ -14,7 +14,7 @@ Es el extremo AWS del túnel WireGuard. Vive en la subnet pública con IP privad
 | Tipo | `t3.micro` |
 | AMI | `data.aws_ami.ubuntu.id` (Ubuntu 24.04 LTS latest) |
 | IP privada | `10.0.1.10` |
-| EIP | `34.204.119.208` (al cambiar de cuenta, hay que actualizar el Endpoint en OPNsense) |
+| EIP | `23.22.183.211` (al cambiar de cuenta, hay que actualizar el Endpoint en OPNsense) |
 | `source_dest_check` | `false` (imprescindible para que actúe como router) |
 | `lifecycle` | `ignore_changes = [ami, user_data]` (instancia "pet": no se reemplaza por cambios de AMI ni de user_data) |
 

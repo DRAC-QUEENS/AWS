@@ -2,7 +2,7 @@
 
 El backend de GLPI se compone de un Auto Scaling Group (compute efímero), una base de datos RDS MariaDB (estado persistente) y un EFS compartido (ficheros y metadata). Las instancias del ASG se lanzan desde un Launch Template con Ubuntu vanilla y se configuran por completo en cada arranque mediante un `user_data` idempotente. La separación compute/datos permite sustituir instancias sin perder información.
 
-> **Nota:** este stack sustituyó a una versión anterior en la que GLPI corría como **una sola EC2** con MariaDB y ficheros en disco local. Esa versión sigue documentada en `AWS-SIMPLE.md` y el código vive en el folder `simple/` del repo. La comparación entre ambas explica por qué se introdujeron RDS, EFS y el ASG.
+> **Nota:** este stack sustituyó a una versión anterior en la que GLPI corría como **una sola EC2** con MariaDB y ficheros en disco local. Esa versión sigue documentada en `AWS-HISTORICO-MONOLITICA.md` y el código vive en el folder `simple/` del repo. La comparación entre ambas explica por qué se introdujeron RDS, EFS y el ASG.
 
 # 1. Launch Template
 
@@ -14,7 +14,7 @@ El Launch Template (`lt-glpi-dracs-...`) define cómo se fabrica cada instancia 
 | --- | --- |
 | AMI | `var.glpi_ami_id != "" ? var.glpi_ami_id : data.aws_ami.ubuntu.id` (Packer o Ubuntu 24.04 LTS latest) |
 | Tipo | `t3.small` |
-| Key pair | `var.key_name` (en producción `dracs2`) |
+| Key pair | `var.key_name` (en producción `dracs3`) |
 | Security Group | `glpi-dracs` |
 | IAM profile | `LabInstanceProfile` (habilita SSM Session Manager y acceso ACM para importar certs) |
 | Block device | `/dev/sda1` 20 GB gp3, encrypted |
@@ -123,7 +123,7 @@ La BD vive fuera de las instancias del ASG para que sobreviva a su sustitución.
 | Engine | MariaDB 10.11 |
 | Clase | `db.t3.micro` |
 | Almacenamiento | 20 GB gp3, encrypted |
-| Endpoint | `rds-glpi-dracs.capsrvyl1db1.us-east-1.rds.amazonaws.com:3306` |
+| Endpoint | `rds-glpi-dracs.cslxtt5nmaa1.us-east-1.rds.amazonaws.com:3306` (cambia al recrear; recuperar con `aws rds describe-db-instances --db-instance-identifier rds-glpi-dracs --query 'DBInstances[0].Endpoint.Address' --output text`) |
 | BD inicial | `glpi`, usuario `glpi`, contraseña en `var.glpi_db_password` |
 | Subnet group | `rds-subnet-glpi-dracs` (privada-a + privada-b) |
 | Security Group | `rds-glpi-dracs` (sólo desde `glpi-dracs` SG, puerto 3306) |
@@ -138,7 +138,7 @@ EFS es el almacenamiento NFS compartido entre todas las instancias del ASG. Aloj
 
 | Atributo | Valor |
 | --- | --- |
-| Filesystem ID | `fs-00891f16aba18e12b` |
+| Filesystem ID | `fs-022fab99c95d08316` |
 | Encryption | At rest activada |
 | DNS endpoint | `<fs-id>.efs.us-east-1.amazonaws.com` |
 | Mount targets | privada-a (10.0.2.x) + privada-b (10.0.4.x), cada uno con su ENI |
@@ -188,4 +188,4 @@ Tras la migración el ASG se levanta (`asg_desired=1`), el `user_data` detecta q
 * **AWS-BALANCEO.md** — ALB que reparte tráfico al target group del ASG
 * **AWS-SEGURIDAD.md** — los Security Groups que limitan quién puede hablar con RDS/EFS
 * **AWS-RUNBOOK.md** — reemplazo de instancia ASG, cambio de `desired_capacity`, troubleshooting
-* **AWS-SIMPLE.md** — versión previa monolítica (GLPI standalone con MariaDB+ficheros locales) para comparar con este stack
+* **AWS-HISTORICO-MONOLITICA.md** — versión previa monolítica (GLPI standalone con MariaDB+ficheros locales) para comparar con este stack

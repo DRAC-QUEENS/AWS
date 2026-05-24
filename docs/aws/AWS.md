@@ -61,7 +61,7 @@ La cuenta es del entorno **AWS Academy (voclabs)**. Esto tiene implicaciones con
 | Algunos servicios | Limitados o desactivados (ACM Private CA, Route53 Resolver privado, etc.) |
 | Tiempo de sesión | El laboratorio caduca tras X horas; las EC2 y EBS persisten pero las credenciales no |
 
-Se ha mantenido el mismo nombre de key pair (`dracs2`) que existía previamente en la cuenta para no tener que regenerar el `.pem` localmente.
+El key pair en uso es `dracs3` (creado en la cuenta actual; `.pem` en `~/.ssh/dracs3.pem`). El nombre se parametriza vía `var.key_name` en `terraform.tfvars`.
 
 > **Nota:** las claves de WireGuard se mantienen iguales entre cuentas (están en `terraform.tfvars`). Al cambiar de cuenta solo cambia el EIP del gateway, y eso se actualiza en el peer de OPNsense.
 
@@ -69,7 +69,7 @@ Se ha mantenido el mismo nombre de key pair (`dracs2`) que existía previamente 
 
 ---
 
-Esta arquitectura no fue la primera. Antes se desplegó una versión **monolítica y de una sola AZ** (código en el folder `simple/` del repo) con todo GLPI en una EC2 standalone, MariaDB local y ficheros en disco. Sirvió para validar rápido la VPN y la autenticación contra el AD. Cuando vimos que íbamos bien de tiempo en el Sprint 3, se rehízo el stack con los patrones que se describen aquí. La documentación de aquella primera versión está en `AWS-SIMPLE.md`.
+Esta arquitectura no fue la primera. Antes se desplegó una versión **monolítica y de una sola AZ** (código en el folder `simple/` del repo) con todo GLPI en una EC2 standalone, MariaDB local y ficheros en disco. Sirvió para validar rápido la VPN y la autenticación contra el AD. Cuando vimos que íbamos bien de tiempo en el Sprint 3, se rehízo el stack con los patrones que se describen aquí. La documentación de aquella primera versión está en `AWS-HISTORICO-MONOLITICA.md`.
 
 A continuación se justifican las decisiones técnicas más relevantes que diferencian este despliegue de uno trivial.
 

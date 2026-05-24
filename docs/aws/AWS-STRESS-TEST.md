@@ -9,7 +9,7 @@ posterior scale-in al cesar la carga.
 
 El runbook está pensado para ejecutarse desde una terminal local con el
 AWS CLI configurado contra la cuenta del laboratorio
-(`123561366922`).
+(`563771271989`).
 
 ## 1. Requisitos previos
 

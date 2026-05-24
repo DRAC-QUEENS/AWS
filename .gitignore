@@ -27,3 +27,6 @@ override.tf.json
 .DS_Store
 .env
 .env.local
+
+# Resumen personal para revision offline, no forma parte del repo final
+INFRAESTRUCTURA.md

@@ -142,7 +142,8 @@ Dos causas posibles:
 **a) `url_base` en la BD apunta al path antiguo (legacy `/glpi`).** El `user_data` lo arregla en cada arranque, pero si se ha re-importado un dump puede volver a aparecer.
 
 ```bash
-mysql -h rds-glpi-dracs.capsrvyl1db1.us-east-1.rds.amazonaws.com \
+mysql -h "$(aws rds describe-db-instances --db-instance-identifier rds-glpi-dracs \
+            --query 'DBInstances[0].Endpoint.Address' --output text)" \
   -u glpi -p<pass> glpi -e "
   UPDATE glpi_configs SET value = 'https://dracs-glpi.duckdns.org'
     WHERE name = 'url_base';

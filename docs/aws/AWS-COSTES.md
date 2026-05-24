@@ -96,6 +96,6 @@ Se han configurado **3 alarmas de CloudWatch** en el laboratorio que notifican p
 
 * **AWS.md** — visión general y decisiones de diseño
 * **AWS-GLPI.md** — ASG, RDS y EFS (los componentes más costosos de la arquitectura actual)
-* **AWS-SIMPLE.md** — arquitectura previa (la más barata, sin HA)
+* **AWS-HISTORICO-MONOLITICA.md** — arquitectura previa (la más barata, sin HA)
 * **AWS-RUNBOOK.md** — cómo bajar el ASG a 0 para ahorrar cuando no se usa
 * **AWS-TERRAFORM.md** — variables `asg_desired` y `create_ami_backup` que afectan al coste

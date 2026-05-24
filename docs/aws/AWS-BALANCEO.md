@@ -13,7 +13,7 @@ El ALB tiene DNS pero sus IPs pueden cambiar, lo que choca con DuckDNS que neces
 | Name | `nlb-glpi-dracs` |
 | Tipo | Network Load Balancer (capa 4) |
 | Scheme | internet-facing |
-| EIP | `50.19.112.122` (DuckDNS apunta aquí) |
+| EIP | `35.175.33.121` (DuckDNS apunta aquí) |
 | AZ | us-east-1a (un único mapping; la EIP solo puede ir a una AZ) |
 | Listeners | `TCP:80`, `TCP:443` |
 
@@ -41,7 +41,7 @@ El ALB es internet-facing en las dos AZs (publica-a y publica-b) y termina el TL
 | Scheme | internet-facing |
 | Subnets | publica-a + publica-b (multi-AZ) |
 | Security Group | `alb-glpi-dracs` |
-| DNS | `alb-glpi-dracs-949041849.us-east-1.elb.amazonaws.com` |
+| DNS | `alb-glpi-dracs-1397970751.us-east-1.elb.amazonaws.com` (cambia al recrear el ALB; recupera con `aws elbv2 describe-load-balancers --names alb-glpi-dracs --query 'LoadBalancers[0].DNSName' --output text`) |
 | Listeners | HTTP:80 (redirect 301 a HTTPS), HTTPS:443 (cert ACM) |
 
 ![](aws-alb.png){width=900px}
@@ -164,7 +164,7 @@ data "aws_acm_certificate" "glpi" {
 
 ```
 1. Usuario → https://dracs-glpi.duckdns.org/
-2. DuckDNS resuelve → 50.19.112.122 (EIP NLB)
+2. DuckDNS resuelve → 35.175.33.121 (EIP NLB)
 3. NLB:TCP:443 → ALB:443
 4. ALB descifra TLS con el cert ACM
 5. ALB → target group tg-glpi-dracs → instancia del ASG en HTTP:80

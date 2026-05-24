@@ -317,4 +317,4 @@ consola.
   (reemplazo de instancia, renovación de cert, etc.).
 - `docs/aws/AWS-STRESS-TEST.md` — procedimiento manual para validar la
   política de autoescalado por CPU.
-- `CONTEXTO.md` — estado del proyecto y endpoints actuales por sesión.
+- `terraform output` y `aws … describe-…` — fuente actual de IDs/IPs reales (no hay doc centralizado).
