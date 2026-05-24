@@ -2,7 +2,7 @@
 
 El backend de GLPI se compone de un Auto Scaling Group (compute efímero), una base de datos RDS MariaDB (estado persistente) y un EFS compartido (ficheros y metadata). Las instancias del ASG se lanzan desde un Launch Template con Ubuntu vanilla y se configuran por completo en cada arranque mediante un `user_data` idempotente. La separación compute/datos permite sustituir instancias sin perder información.
 
-> **Nota:** este stack sustituyó a una versión anterior en la que GLPI corría como **una sola EC2** con MariaDB y ficheros en disco local. Esa versión sigue documentada en `AWS-HISTORICO-MONOLITICA.md` y el código vive en el folder `simple/` del repo. La comparación entre ambas explica por qué se introdujeron RDS, EFS y el ASG.
+> **Nota:** este stack sustituyó a una versión anterior en la que GLPI corría como **una sola EC2** con MariaDB y ficheros en disco local. Esa versión sigue documentada en `G2-A-62` / `AWS-HISTORICO-MONOLITICA.md` y el código vive en el folder `simple/` del repo. La comparación entre ambas explica por qué se introdujeron RDS, EFS y el ASG.
 
 # 1. Launch Template
 
@@ -157,7 +157,7 @@ EFS es el almacenamiento NFS compartido entre todas las instancias del ASG. Aloj
     └── live/dracs-glpi/
 ```
 
-> **Nota:** desde Sprint 4 el filesystem se monta en `/mnt/efs` (raíz limpia) y desde ahí se hacen symlinks a `/var/www/html/glpi/files` y `/var/www/html/glpi/plugins`. Esto permite tener también los plugins compartidos entre instancias, y aloja directorios auxiliares (como `letsencrypt/`) que no son parte de GLPI.
+> **Nota:** desde Sprint 2 el filesystem se monta en `/mnt/efs` (raíz limpia) y desde ahí se hacen symlinks a `/var/www/html/glpi/files` y `/var/www/html/glpi/plugins`. Esto permite tener también los plugins compartidos entre instancias, y aloja directorios auxiliares (como `letsencrypt/`) que no son parte de GLPI.
 
 > **Nota:** `_meta/config/glpicrypt.key` se puso ahí durante la migración (ver punto 6). El `user_data` la restaura a `/var/www/html/glpi/config/` en cada instancia del ASG, porque la carpeta `config/` está fuera del DocumentRoot accesible y, además, vive en el disco efímero de cada instancia.
 
@@ -183,9 +183,9 @@ Tras la migración el ASG se levanta (`asg_desired=1`), el `user_data` detecta q
 
 ---
 
-* **AWS.md** — visión general
-* **AWS-RED.md** — subnets privadas donde viven el ASG, RDS y EFS
-* **AWS-BALANCEO.md** — ALB que reparte tráfico al target group del ASG
-* **AWS-SEGURIDAD.md** — los Security Groups que limitan quién puede hablar con RDS/EFS
-* **AWS-RUNBOOK.md** — reemplazo de instancia ASG, cambio de `desired_capacity`, troubleshooting
-* **AWS-HISTORICO-MONOLITICA.md** — versión previa monolítica (GLPI standalone con MariaDB+ficheros locales) para comparar con este stack
+* **G2-A-59 — AWS.md** — visión general
+* **G2-A-65 — AWS-RED.md** — subnets privadas donde viven el ASG, RDS y EFS
+* **G2-A-67 — AWS-BALANCEO.md** — ALB que reparte tráfico al target group del ASG
+* **G2-A-61 — AWS-SEGURIDAD.md** — los Security Groups que limitan quién puede hablar con RDS/EFS
+* **G2-A-64 — AWS-RUNBOOK.md** — reemplazo de instancia ASG, cambio de `desired_capacity`, troubleshooting
+* **G2-A-62 — AWS-HISTORICO-MONOLITICA.md** — versión previa monolítica (GLPI standalone con MariaDB+ficheros locales) para comparar con este stack

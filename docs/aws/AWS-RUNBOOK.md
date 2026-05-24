@@ -291,9 +291,9 @@ Este parche dura hasta que se reemplace la instancia. Si se quiere persistir el 
 
 ---
 
-* **AWS.md** — visión general y problemas encontrados (resumen ejecutivo)
-* **AWS-GLPI.md** — detalle de `user_data` idempotente y migrator
-* **AWS-BALANCEO.md** — detalle de cert TLS y listeners
-* **AWS-VPN.md** — gateway WireGuard
-* **AWS-SEGURIDAD.md** — KMS, SGs y secretos
-* **AWS-TERRAFORM.md** — procedimiento completo de migración entre cuentas
+* **G2-A-59 — AWS.md** — visión general y problemas encontrados (resumen ejecutivo)
+* **G2-A-66 — AWS-GLPI.md** — detalle de `user_data` idempotente y migrator
+* **G2-A-67 — AWS-BALANCEO.md** — detalle de cert TLS y listeners
+* **G2-A-60 — AWS-VPN.md** — gateway WireGuard
+* **G2-A-61 — AWS-SEGURIDAD.md** — KMS, SGs y secretos
+* **G2-A-63 — AWS-TERRAFORM.md** — procedimiento completo de migración entre cuentas

@@ -313,8 +313,8 @@ consola.
 
 - `INFRAESTRUCTURA.md` (raíz del repo) — descripción global de la
   infraestructura con referencias a cada fichero `.tf`.
-- `docs/aws/AWS-RUNBOOK.md` — procedimientos operativos recurrentes
+- `G2-A-64` / `docs/aws/AWS-RUNBOOK.md` — procedimientos operativos recurrentes
   (reemplazo de instancia, renovación de cert, etc.).
-- `docs/aws/AWS-STRESS-TEST.md` — procedimiento manual para validar la
-  política de autoescalado por CPU.
+- ⚠️ pendiente crear issue YouTrack / `docs/aws/AWS-STRESS-TEST.md` — procedimiento
+  manual para validar la política de autoescalado por CPU.
 - `terraform output` y `aws … describe-…` — fuente actual de IDs/IPs reales (no hay doc centralizado).

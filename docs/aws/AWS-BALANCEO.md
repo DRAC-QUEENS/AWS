@@ -82,7 +82,7 @@ default_action {
 | `nlb-to-alb-dracs` | TCP:80 | alb | ALB:80 | HTTP `/`, matcher `200-302` |
 | `nlb-to-alb-443-dracs` | TCP:443 | alb | ALB:443 | HTTPS `/`, matcher `200-302` |
 
-> **Nota sobre el path:** se usa `/` como path de health check, no `/glpi/`, porque el Apache de las instancias del ASG está configurado con `DocumentRoot=/var/www/html/glpi` y sirve GLPI en la raíz. Ver `AWS-GLPI.md` para el detalle de por qué.
+> **Nota sobre el path:** se usa `/` como path de health check, no `/glpi/`, porque el Apache de las instancias del ASG está configurado con `DocumentRoot=/var/www/html/glpi` y sirve GLPI en la raíz. Ver `G2-A-66` / `AWS-GLPI.md` para el detalle de por qué.
 
 El `target_group_attachment` del NLB al ALB depende explícitamente de que exista el listener correspondiente del ALB:
 
@@ -154,7 +154,7 @@ data "aws_acm_certificate" "glpi" {
 
 > **Nota sobre la renovación:** los certs Let's Encrypt duran 90 días. Hoy la renovación no está automatizada: hay que volver a ejecutar el certbot, re-importar a ACM y el `data source` cogerá la versión nueva en el siguiente `terraform apply`. El runbook tiene los pasos detallados.
 
-> **Nota sobre la persistencia del cert:** desde Sprint 4 los ficheros del cert se guardan en EFS (`/mnt/efs/letsencrypt/`) y el `user_data` del ASG los restaura a `/etc/letsencrypt` en cada arranque. Esto evita tener que volver a instalar certbot y emitir el cert desde cero cada vez que se reemplaza una instancia del ASG. La operación de copiar `cp -a /etc/letsencrypt /mnt/efs/letsencrypt/` sigue siendo manual tras cada renovación.
+> **Nota sobre la persistencia del cert:** desde Sprint 3 los ficheros del cert se guardan en EFS (`/mnt/efs/letsencrypt/`) y el `user_data` del ASG los restaura a `/etc/letsencrypt` en cada arranque. Esto evita tener que volver a instalar certbot y emitir el cert desde cero cada vez que se reemplaza una instancia del ASG. La operación de copiar `cp -a /etc/letsencrypt /mnt/efs/letsencrypt/` sigue siendo manual tras cada renovación.
 
 # 5. Flujo del tráfico
 
@@ -186,8 +186,9 @@ data "aws_acm_certificate" "glpi" {
 
 ---
 
-* **AWS.md** — visión general
-* **AWS-RED.md** — subnets en las que viven NLB y ALB
-* **AWS-GLPI.md** — target group del ASG y health check path
-* **AWS-SEGURIDAD.md** — Security Group del ALB (80/443 desde 0.0.0.0/0 y desde Nginx SG)
-* **AWS-RUNBOOK.md** — procedimiento de renovación del cert
+* **G2-A-59 — AWS.md** — visión general
+* **G2-A-65 — AWS-RED.md** — subnets en las que viven NLB y ALB
+* **G2-A-66 — AWS-GLPI.md** — target group del ASG y health check path
+* **G2-A-61 — AWS-SEGURIDAD.md** — Security Group del ALB (80/443 desde 0.0.0.0/0 y desde Nginx SG)
+* **G2-A-64 — AWS-RUNBOOK.md** — procedimiento de renovación del cert
+* **⚠️ pendiente crear issue YouTrack — AWS-CERT-EVOLUCION.md** — journey histórico HTTP-01 → DNS-01 + ACM + persistencia EFS

@@ -55,7 +55,7 @@ Stack completo: ASG + ALB + NLB en capa de red, RDS y EFS como capa de datos per
 | DynamoDB lock | PAY_PER_REQUEST | despreciable | — | ~0,01 $ |
 | **Total mensual** | | | | **~113,25 $** |
 
-> **Nota:** desde Sprint 4 el default de `asg_desired` es **2** (una instancia por AZ), que es la cifra reflejada en la tabla. Si se baja a 1 (`-var asg_desired=1`) se ahorran ~15 $/mes. Si se sube a 3 por una punta de carga, se suman otros ~15 $/mes por cada instancia adicional. El NAT Gateway sigue siendo el componente más caro: con `desired=2` representa el 29 % del total mensual aunque el tráfico sea mínimo, por su tarifa fija de horas.
+> **Nota:** desde Sprint 2 el default de `asg_desired` es **2** (una instancia por AZ), que es la cifra reflejada en la tabla. Si se baja a 1 (`-var asg_desired=1`) se ahorran ~15 $/mes. Si se sube a 3 por una punta de carga, se suman otros ~15 $/mes por cada instancia adicional. El NAT Gateway sigue siendo el componente más caro: con `desired=2` representa el 29 % del total mensual aunque el tráfico sea mínimo, por su tarifa fija de horas.
 
 ![](aws-nueva-costes.png){width=900px}
 <!-- captura: AWS Console → Billing → Cost Explorer → filtrar por servicio, periodo Sprint 3 -->
@@ -94,8 +94,8 @@ Se han configurado **3 alarmas de CloudWatch** en el laboratorio que notifican p
 
 ---
 
-* **AWS.md** — visión general y decisiones de diseño
-* **AWS-GLPI.md** — ASG, RDS y EFS (los componentes más costosos de la arquitectura actual)
-* **AWS-HISTORICO-MONOLITICA.md** — arquitectura previa (la más barata, sin HA)
-* **AWS-RUNBOOK.md** — cómo bajar el ASG a 0 para ahorrar cuando no se usa
-* **AWS-TERRAFORM.md** — variables `asg_desired` y `create_ami_backup` que afectan al coste
+* **G2-A-59 — AWS.md** — visión general y decisiones de diseño
+* **G2-A-66 — AWS-GLPI.md** — ASG, RDS y EFS (los componentes más costosos de la arquitectura actual)
+* **G2-A-62 — AWS-HISTORICO-MONOLITICA.md** — arquitectura previa (la más barata, sin HA)
+* **G2-A-64 — AWS-RUNBOOK.md** — cómo bajar el ASG a 0 para ahorrar cuando no se usa
+* **G2-A-63 — AWS-TERRAFORM.md** — variables `asg_desired` y `create_ami_backup` que afectan al coste

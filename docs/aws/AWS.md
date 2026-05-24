@@ -69,7 +69,7 @@ El key pair en uso es `dracs3` (creado en la cuenta actual; `.pem` en `~/.ssh/dr
 
 ---
 
-Esta arquitectura no fue la primera. Antes se desplegó una versión **monolítica y de una sola AZ** (código en el folder `simple/` del repo) con todo GLPI en una EC2 standalone, MariaDB local y ficheros en disco. Sirvió para validar rápido la VPN y la autenticación contra el AD. Cuando vimos que íbamos bien de tiempo en el Sprint 3, se rehízo el stack con los patrones que se describen aquí. La documentación de aquella primera versión está en `AWS-HISTORICO-MONOLITICA.md`.
+Esta arquitectura no fue la primera. Antes se desplegó una versión **monolítica y de una sola AZ** (código en el folder `simple/` del repo) con todo GLPI en una EC2 standalone, MariaDB local y ficheros en disco. Sirvió para validar rápido la VPN y la autenticación contra el AD. Cuando vimos que íbamos bien de tiempo en el Sprint 3, se rehízo el stack con los patrones que se describen aquí. La documentación de aquella primera versión está en `G2-A-62` / `AWS-HISTORICO-MONOLITICA.md`.
 
 A continuación se justifican las decisiones técnicas más relevantes que diferencian este despliegue de uno trivial.
 
@@ -79,9 +79,9 @@ A continuación se justifican las decisiones técnicas más relevantes que difer
 
 **NLB + ALB juntos.** El ALB es lo que de verdad enruta y termina TLS, pero su DNS público no tiene IP fija. DuckDNS necesita una IP estática y el NLB sí permite asociar una EIP, así que el NLB hace de "portero" con IP fija y delega al ALB. El target type del NLB es `alb`, una integración nativa para este caso.
 
-**TLS termina en el ALB.** El cert vive en ACM (importado desde certbot, ver `AWS-BALANCEO.md`). El backend trabaja en HTTP plano dentro de la VPC, lo que simplifica la configuración de los target groups.
+**TLS termina en el ALB.** El cert vive en ACM (importado desde certbot, ver `G2-A-67` / `AWS-BALANCEO.md`). El backend trabaja en HTTP plano dentro de la VPC, lo que simplifica la configuración de los target groups.
 
-**AMI Packer con GLPI pre-instalado.** Tras Sprint 4 el Launch Template usa una AMI custom construida con Packer (`packer/glpi.pkr.hcl`) que trae Ubuntu 24.04 + Apache + PHP 8.3 + GLPI 10.0.18 ya instalados. Esto reduce el tiempo de arranque de una instancia nueva de ~10 minutos a ~2 minutos. El `user_data` sigue siendo idempotente: si la AMI ya trae lo que necesita, salta los pasos de descarga e instalación; si se usa Ubuntu vanilla (`var.glpi_ami_id = ""`), instala todo desde cero como fallback. Los datos persistentes (BD y ficheros) siguen viviendo en RDS y EFS, fuera del compute.
+**AMI Packer con GLPI pre-instalado.** Tras Sprint 2 el Launch Template usa una AMI custom construida con Packer (`packer/glpi.pkr.hcl`) que trae Ubuntu 24.04 + Apache + PHP 8.3 + GLPI 10.0.18 ya instalados. Esto reduce el tiempo de arranque de una instancia nueva de ~10 minutos a ~2 minutos. El `user_data` sigue siendo idempotente: si la AMI ya trae lo que necesita, salta los pasos de descarga e instalación; si se usa Ubuntu vanilla (`var.glpi_ami_id = ""`), instala todo desde cero como fallback. Los datos persistentes (BD y ficheros) siguen viviendo en RDS y EFS, fuera del compute.
 
 # 4. Problemas encontrados
 

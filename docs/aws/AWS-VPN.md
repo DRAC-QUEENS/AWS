@@ -69,7 +69,7 @@ PersistentKeepalive = 25
 
 ---
 
-Tras Sprint 4 Nginx se ha simplificado: ya no termina TLS ni hace `proxy_pass`. Su único trabajo es devolver un `301 Redirect` al dominio público para los usuarios que entran por la VPN. El certificado público del ALB (Let's Encrypt) sirve a todos los usuarios, incluido el tráfico interno, evitando el warning de navegador del cert autofirmado que existía antes.
+Tras la simplificación de Sprint 2 Nginx ya no termina TLS ni hace `proxy_pass`. Su único trabajo es devolver un `301 Redirect` al dominio público para los usuarios que entran por la VPN. El certificado público del ALB (Let's Encrypt) sirve a todos los usuarios, incluido el tráfico interno, evitando el warning de navegador del cert autofirmado que existía antes.
 
 | Atributo | Valor |
 | --- | --- |
@@ -114,8 +114,8 @@ Acceso desde on-prem: `http://10.0.1.20/` (cualquier path). El navegador recibir
 
 ---
 
-* **AWS.md** — visión general y decisiones de diseño
-* **AWS-RED.md** — VPC, subnets y rutas que dependen de la ENI del WG EC2
-* **AWS-BALANCEO.md** — ALB al que Nginx hace `proxy_pass`
-* **AWS-SEGURIDAD.md** — Security Groups de WireGuard y Nginx
+* **G2-A-59 — AWS.md** — visión general y decisiones de diseño
+* **G2-A-65 — AWS-RED.md** — VPC, subnets y rutas que dependen de la ENI del WG EC2
+* **G2-A-67 — AWS-BALANCEO.md** — ALB al que Nginx hace `proxy_pass`
+* **G2-A-61 — AWS-SEGURIDAD.md** — Security Groups de WireGuard y Nginx
 * `G2-A-53` (OPNsense) — el otro extremo del túnel WireGuard

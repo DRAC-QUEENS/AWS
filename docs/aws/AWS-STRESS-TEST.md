@@ -185,4 +185,4 @@ aws autoscaling set-desired-capacity \
   `aws_autoscaling_policy.cpu_target`).
 - ALB y target group definidos en `glpi_scaling.tf`.
 - Resumen general del escalado: `INFRAESTRUCTURA.md` § Auto Scaling.
-- Operativa de Session Manager: `docs/aws/AWS-RUNBOOK.md`.
+- Operativa de Session Manager: `G2-A-64` / `docs/aws/AWS-RUNBOOK.md`.

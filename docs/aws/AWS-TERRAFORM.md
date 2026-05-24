@@ -104,7 +104,7 @@ El bucket tiene `lifecycle { prevent_destroy = true }` para que un `terraform de
 
 ---
 
-Este procedimiento se ha aplicado dos veces: primero de `947411159788` → `123561366922` y después de `123561366922` → la cuenta actual `563771271989`. Se documenta aquí porque está acoplado al código Terraform (AMIs custom, variables, asg_desired). La segunda migración fue más simple porque RDS y EFS persisten entre sesiones de Academy y se reutilizaron presigned URLs cross-account en vez de KMS share.
+Este procedimiento se ha aplicado dos veces: primero de `947411159788` → `123561366922` (durante Sprint 2) y después de `123561366922` → la cuenta actual `563771271989` (Sprint 3, 2026-05-22). Se documenta aquí porque está acoplado al código Terraform (AMIs custom, variables, asg_desired). La segunda migración fue más simple porque RDS y EFS persisten entre sesiones de Academy y se reutilizaron presigned URLs cross-account en vez de KMS share.
 
 **Resumen del flujo:**
 
@@ -132,7 +132,7 @@ Este procedimiento se ha aplicado dos veces: primero de `947411159788` → `1235
 
 8. **OPNsense** — actualizar el Endpoint del peer WireGuard a la EIP del nuevo WG EC2. Las claves WG no cambian (vienen de `tfvars` y se mantienen iguales).
 
-9. **Renovar el cert TLS** — el cert no migra. Hay que volver a ejecutar certbot DNS-01 en la cuenta nueva (ver `AWS-BALANCEO.md`).
+9. **Renovar el cert TLS** — el cert no migra. Hay que volver a ejecutar certbot DNS-01 en la cuenta nueva (ver `G2-A-67` / `AWS-BALANCEO.md`).
 
 10. **Verificar** — `https://dracs-glpi.duckdns.org/` debe cargar el login. Hacer un login con un usuario del DC para validar que la auth LDAP funciona (lo que también valida la VPN y la `glpicrypt.key`).
 
@@ -142,8 +142,8 @@ Este procedimiento se ha aplicado dos veces: primero de `947411159788` → `1235
 
 ---
 
-* **AWS.md** — visión general
-* **AWS-SEGURIDAD.md** — CMK para cross-account share y custodia de secretos en tfvars
-* **AWS-GLPI.md** — detalle del migrator EC2 y del `user_data` idempotente
-* **AWS-BALANCEO.md** — emisión del cert TLS (no migra, se reemite)
-* **AWS-RUNBOOK.md** — operativa post-migración
+* **G2-A-59 — AWS.md** — visión general
+* **G2-A-61 — AWS-SEGURIDAD.md** — CMK para cross-account share y custodia de secretos en tfvars
+* **G2-A-66 — AWS-GLPI.md** — detalle del migrator EC2 y del `user_data` idempotente
+* **G2-A-67 — AWS-BALANCEO.md** — emisión del cert TLS (no migra, se reemite)
+* **G2-A-64 — AWS-RUNBOOK.md** — operativa post-migración
