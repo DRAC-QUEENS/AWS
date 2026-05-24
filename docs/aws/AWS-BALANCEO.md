@@ -25,7 +25,7 @@ Cada listener forwardea a un target group de tipo `alb`:
 | `TCP:443` | `nlb-to-alb-443-dracs` | ALB:443 |
 
 Los target groups con `target_type = "alb"` son una integración nativa que permite usar el ALB como target del NLB sin tener que listar IPs (que cambiarían con el tiempo).
-
+r
 > **Nota:** el NLB no tiene Security Group propio (no es soportado en NLBs de tipo classic). El filtrado lo hace el SG del ALB.
 
 # 2. Application Load Balancer (ALB)
@@ -101,60 +101,9 @@ Sin este `depends_on` el primer `terraform apply` falla con un error de validaci
 
 ---
 
-El certificado para `dracs-glpi.duckdns.org` se emite con **certbot** usando el plugin `dns-duckdns` (challenge DNS-01), se importa a **ACM**, y el ALB lo consume vía `data "aws_acm_certificate"`.
+El ALB termina TLS en `:443` con un certificado Let's Encrypt para `dracs-glpi.duckdns.org`, emitido vía DNS-01 (plugin `certbot-dns-duckdns`) e importado a ACM. El listener lo consume vía `data "aws_acm_certificate"` con `most_recent = true`.
 
-**Por qué DNS-01 y no HTTP-01:**
-- HTTP-01 requeriría abrir puerto 80 público hacia certbot y servir un fichero en `/.well-known/acme-challenge/`. El ALB hace redirect 301 a HTTPS, lo que rompería el challenge sin reconfigurar el listener.
-- DNS-01 solo necesita el token de DuckDNS para crear el TXT `_acme-challenge.dracs-glpi.duckdns.org` y un acceso de salida a `acme-v02.api.letsencrypt.org`. No expone nada en HTTP.
-
-**Procedimiento de emisión** (ejecutado dentro de una instancia del ASG vía SSM):
-
-```bash
-# Plugin certbot-dns-duckdns en un venv (Ubuntu 24.04 bloquea pip system-wide)
-DEBIAN_FRONTEND=noninteractive apt-get install -y certbot python3-venv
-python3 -m venv /opt/cb
-/opt/cb/bin/pip install certbot certbot-dns-duckdns
-
-# Credenciales DuckDNS
-echo "dns_duckdns_token = <TOKEN>" > /etc/certbot/duckdns.ini
-chmod 600 /etc/certbot/duckdns.ini
-
-# Emisión (cert ECDSA por defecto)
-/opt/cb/bin/certbot certonly --non-interactive --agree-tos \
-  --email joelsansi4@gmail.com \
-  --authenticator dns-duckdns \
-  --dns-duckdns-credentials /etc/certbot/duckdns.ini \
-  --dns-duckdns-propagation-seconds 60 \
-  -d dracs-glpi.duckdns.org \
-  --cert-name dracs-glpi
-```
-
-**Import a ACM** (desde la propia máquina si tiene IAM permitido, o desde local con los PEMs descargados):
-
-```bash
-aws acm import-certificate --region us-east-1 \
-  --certificate     fileb:///etc/letsencrypt/live/dracs-glpi/cert.pem \
-  --private-key     fileb:///etc/letsencrypt/live/dracs-glpi/privkey.pem \
-  --certificate-chain fileb:///etc/letsencrypt/live/dracs-glpi/chain.pem
-```
-
-**Consumo desde Terraform** — un data source que recoge automáticamente la versión más reciente del cert:
-
-```hcl
-data "aws_acm_certificate" "glpi" {
-  domain      = "dracs-glpi.duckdns.org"
-  most_recent = true
-  statuses    = ["ISSUED"]
-  # certbot emite ECDSA por defecto; el filtro por defecto del data source es RSA
-  key_types = ["EC_prime256v1", "EC_secp384r1"]
-}
-```
-
-> **Nota sobre key_types:** sin esto el data source no encuentra el cert. Se incluyen los dos tipos ECDSA que emite certbot por defecto. Si en algún momento se cambiase a RSA habría que añadir `RSA_2048`.
-
-> **Nota sobre la renovación:** los certs Let's Encrypt duran 90 días. Hoy la renovación no está automatizada: hay que volver a ejecutar el certbot, re-importar a ACM y el `data source` cogerá la versión nueva en el siguiente `terraform apply`. El runbook tiene los pasos detallados.
-
-> **Nota sobre la persistencia del cert:** desde Sprint 3 los ficheros del cert se guardan en EFS (`/mnt/efs/letsencrypt/`) y el `user_data` del ASG los restaura a `/etc/letsencrypt` en cada arranque. Esto evita tener que volver a instalar certbot y emitir el cert desde cero cada vez que se reemplaza una instancia del ASG. La operación de copiar `cp -a /etc/letsencrypt /mnt/efs/letsencrypt/` sigue siendo manual tras cada renovación.
+**Documentación completa**: [AWS-CERTIFICADO.md](AWS-CERTIFICADO.md) — arquitectura, emisión inicial, renovación cada 90 días, persistencia en EFS e historia.
 
 # 5. Flujo del tráfico
 
@@ -190,5 +139,5 @@ data "aws_acm_certificate" "glpi" {
 * **G2-A-65 — AWS-RED.md** — subnets en las que viven NLB y ALB
 * **G2-A-66 — AWS-GLPI.md** — target group del ASG y health check path
 * **G2-A-61 — AWS-SEGURIDAD.md** — Security Group del ALB (80/443 desde 0.0.0.0/0 y desde Nginx SG)
-* **G2-A-64 — AWS-RUNBOOK.md** — procedimiento de renovación del cert
-* **⚠️ pendiente crear issue YouTrack — AWS-CERT-EVOLUCION.md** — journey histórico HTTP-01 → DNS-01 + ACM + persistencia EFS
+* **AWS-CERTIFICADO.md** — todo sobre el certificado TLS: arquitectura, emisión, renovación 90d, persistencia EFS, historia
+* **G2-A-64 — AWS-RUNBOOK.md** — runbook operativo general

@@ -179,7 +179,7 @@ Mantiene su propio `terraform.tfstate` (sufijo `simple-dracs` en los nombres de 
 
 ---
 
-* **AWS.md** — visión general y decisiones de diseño (incluye el porqué de la evolución hacia la versión actual)
-* **AWS-GLPI.md** — la versión nueva de GLPI (ASG + RDS + EFS) sobre la que se mejoró respecto a esta arquitectura
-* **AWS-VPN.md** — la parte de WireGuard y Nginx que se mantiene casi igual entre ambas versiones
-* **AWS-TERRAFORM.md** — estructura del IaC y procedimiento general de despliegue
+* **G2-A-59 — AWS.md** — visión general y decisiones de diseño (incluye el porqué de la evolución hacia la versión actual)
+* **G2-A-66 — AWS-GLPI.md** — la versión nueva de GLPI (ASG + RDS + EFS) sobre la que se mejoró respecto a esta arquitectura
+* **G2-A-60 — AWS-VPN.md** — la parte de WireGuard y Nginx que se mantiene casi igual entre ambas versiones
+* **G2-A-63 — AWS-TERRAFORM.md** — estructura del IaC y procedimiento general de despliegue

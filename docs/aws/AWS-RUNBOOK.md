@@ -10,12 +10,12 @@ La forma estándar de obtener shell en cualquier instancia es **SSM Session Mana
 
 ```bash
 # Listar instancias y su ID
-aws ec2 describe-instances --profile dracs-new --region us-east-1 \
+aws ec2 describe-instances --region us-east-1 \
   --query 'Reservations[*].Instances[*].{Name:Tags[?Key==`Name`]|[0].Value,Id:InstanceId}' \
   --output table
 
 # Conectar
-aws ssm start-session --profile dracs-new --region us-east-1 --target i-XXXXXXXX
+aws ssm start-session --region us-east-1 --target i-XXXXXXXX
 ```
 
 Para la instancia del ASG (ID dinámico):
@@ -56,7 +56,7 @@ Las modificaciones del `user_data` solo aplican a **nuevas** instancias. Cambiar
 
 ```bash
 # 1. Aplicar el cambio en Terraform (esto crea una nueva versión del LT)
-AWS_PROFILE=dracs-new terraform apply -auto-approve
+terraform apply -auto-approve
 
 # 2. Identificar la instancia actual y terminarla
 GLPI=$(aws autoscaling describe-auto-scaling-groups \
@@ -76,60 +76,30 @@ aws ec2 terminate-instances --instance-ids $GLPI
 
 ```bash
 # Bajar a 0 para mantenimiento (apagar GLPI sin destruir nada)
-AWS_PROFILE=dracs-new terraform apply -auto-approve -var asg_desired=0
+terraform apply -auto-approve -var asg_desired=0
 
 # Subir a 1 (volver a producción)
-AWS_PROFILE=dracs-new terraform apply -auto-approve -var asg_desired=1
+terraform apply -auto-approve -var asg_desired=1
 
 # Escalar temporalmente a 2 o 3
-AWS_PROFILE=dracs-new terraform apply -auto-approve -var asg_desired=2
+terraform apply -auto-approve -var asg_desired=2
 ```
 
 # 5. Renovar el certificado TLS
 
 ---
 
-El cert de Let's Encrypt dura **90 días**. La renovación no está automatizada hoy. Procedimiento manual:
+Cert Let's Encrypt para `dracs-glpi.duckdns.org`, dura **90 días**, renovación manual cada ~80 días.
 
-```bash
-# 1. Entrar por SSM a una instancia del ASG (no importa cuál)
-GLPI=$(aws autoscaling describe-auto-scaling-groups \
-  --auto-scaling-group-names asg-glpi-dracs \
-  --query 'AutoScalingGroups[0].Instances[0].InstanceId' --output text)
-aws ssm start-session --target $GLPI
+**Procedimiento detallado**: [AWS-CERTIFICADO.md §4](AWS-CERTIFICADO.md#4-renovaci%C3%B3n-cada-90-d%C3%ADas)
 
-# 2. Dentro de la instancia, reinstalar certbot+plugin en venv si no está
-sudo DEBIAN_FRONTEND=noninteractive apt-get install -y certbot python3-venv
-sudo python3 -m venv /opt/cb
-sudo /opt/cb/bin/pip install certbot certbot-dns-duckdns
+Resumen rápido del flujo:
+1. SSM a una instancia del ASG (el `user_data` ya restaura `/etc/letsencrypt` desde EFS)
+2. `sudo /opt/cb/bin/certbot renew --cert-name dracs-glpi`
+3. `aws acm import-certificate --certificate-arn <ARN-existente> ...` (reimportar sobre el mismo ARN, no crear nuevo)
+4. `sudo cp -a /etc/letsencrypt/. /mnt/efs/letsencrypt/` (persistir para la próxima instancia del ASG)
 
-# 3. Credenciales DuckDNS
-echo "dns_duckdns_token = <TOKEN>" | sudo tee /etc/certbot/duckdns.ini
-sudo chmod 600 /etc/certbot/duckdns.ini
-
-# 4. Re-emitir
-sudo /opt/cb/bin/certbot certonly --non-interactive --agree-tos \
-  --email joelsansi4@gmail.com \
-  --authenticator dns-duckdns \
-  --dns-duckdns-credentials /etc/certbot/duckdns.ini \
-  --dns-duckdns-propagation-seconds 60 \
-  -d dracs-glpi.duckdns.org --cert-name dracs-glpi --force-renewal
-
-# 5. Importar a ACM
-sudo aws acm import-certificate --region us-east-1 \
-  --certificate fileb:///etc/letsencrypt/live/dracs-glpi/cert.pem \
-  --private-key fileb:///etc/letsencrypt/live/dracs-glpi/privkey.pem \
-  --certificate-chain fileb:///etc/letsencrypt/live/dracs-glpi/chain.pem \
-  --tags Key=Name,Value=dracs-glpi-cert
-```
-
-El `data "aws_acm_certificate"` recoge automáticamente la versión `most_recent`, por lo que un `terraform apply` después de la importación actualizará el listener HTTPS del ALB.
-
-```bash
-AWS_PROFILE=dracs-new terraform apply -auto-approve
-```
-
-> **Nota:** las instancias del ASG son efímeras. El `/etc/letsencrypt` no persiste entre reemplazos. Si se quiere automatizar la renovación habría que persistir `/etc/letsencrypt` en EFS y un cron que renueve + re-importe a ACM (no implementado).
+No hace falta `terraform apply` — el ARN no cambia, AWS rota el contenido del cert en el ALB automáticamente.
 
 # 6. Troubleshooting
 
@@ -293,7 +263,8 @@ Este parche dura hasta que se reemplace la instancia. Si se quiere persistir el 
 
 * **G2-A-59 — AWS.md** — visión general y problemas encontrados (resumen ejecutivo)
 * **G2-A-66 — AWS-GLPI.md** — detalle de `user_data` idempotente y migrator
-* **G2-A-67 — AWS-BALANCEO.md** — detalle de cert TLS y listeners
+* **G2-A-67 — AWS-BALANCEO.md** — detalle de listeners ALB/NLB
+* **AWS-CERTIFICADO.md** — detalle completo del certificado TLS
 * **G2-A-60 — AWS-VPN.md** — gateway WireGuard
 * **G2-A-61 — AWS-SEGURIDAD.md** — KMS, SGs y secretos
 * **G2-A-63 — AWS-TERRAFORM.md** — procedimiento completo de migración entre cuentas

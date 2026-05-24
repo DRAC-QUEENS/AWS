@@ -123,7 +123,7 @@ La política de gestión de secretos es **simple**: nada en el repo, todo en `te
 | Clave pública WG OPNsense | `wg_opnsense_public_key` | `terraform.tfvars` (`sensitive=true`) |
 | Preshared key WG | `wg_preshared_key` | `terraform.tfvars` (`sensitive=true`) |
 | Token DuckDNS | (no en Terraform) | Sólo se usa en certbot, vive en `/etc/certbot/duckdns.ini` (chmod 600) |
-| Credenciales AWS | (no en Terraform) | `~/.aws/credentials` perfil `dracs-new` |
+| Credenciales AWS | (no en Terraform) | `~/.aws/credentials` perfil `default` (credenciales de AWS Academy) |
 
 El `.gitignore` cubre:
 - `*.tfvars`
@@ -149,9 +149,9 @@ Si esta clave se pierde, las contraseñas almacenadas pasan a ser irrecuperables
 
 ---
 
-* **AWS.md** — visión general
-* **AWS-RED.md** — subnets y rutas (los SGs actúan sobre ENIs de estas subnets)
-* **AWS-VPN.md** — uso del SG `wireguard-dracs` y `nginx-dracs`
-* **AWS-BALANCEO.md** — uso del SG `alb-glpi-dracs`
-* **AWS-GLPI.md** — uso de los SGs `glpi-dracs`, `rds-glpi-dracs`, `efs-glpi-dracs` y custodia de `glpicrypt.key`
-* **AWS-TERRAFORM.md** — tfvars y backend remoto
+* **G2-A-59 — AWS.md** — visión general
+* **G2-A-65 — AWS-RED.md** — subnets y rutas (los SGs actúan sobre ENIs de estas subnets)
+* **G2-A-60 — AWS-VPN.md** — uso del SG `wireguard-dracs` y `nginx-dracs`
+* **G2-A-67 — AWS-BALANCEO.md** — uso del SG `alb-glpi-dracs`
+* **G2-A-66 — AWS-GLPI.md** — uso de los SGs `glpi-dracs`, `rds-glpi-dracs`, `efs-glpi-dracs` y custodia de `glpicrypt.key`
+* **G2-A-63 — AWS-TERRAFORM.md** — tfvars y backend remoto

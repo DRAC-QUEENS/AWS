@@ -149,6 +149,9 @@ flock -u 9
 
 # Paso 7: VirtualHost Apache — se sobreescribe siempre para garantizar RewriteRule
 # (cubre tanto instalaciones frescas como instancias desde AMI Packer)
+# NOTA: DocumentRoot apunta a la raiz de GLPI (no a public/) porque lib/, pics/ y
+# otros assets estaticos viven fuera de public/ y el router de GLPI no los sirve
+# via PHP — Apache tiene que servirlos directamente.
 cat > /etc/apache2/sites-available/glpi.conf << 'APACHE_CONF'
 <VirtualHost *:80>
     DocumentRoot /var/www/html/glpi
@@ -168,7 +171,16 @@ APACHE_CONF
 a2ensite glpi.conf 2>/dev/null || true
 a2dissite 000-default.conf 2>/dev/null || true
 a2enmod rewrite
-echo "[✓] VirtualHost Apache actualizado"
+echo "[✓] VirtualHost Apache actualizado (DocumentRoot → public/)"
+
+# Seguridad: eliminar install.php tras instalacion para evitar reinstalacion accidental
+rm -f /var/www/html/glpi/install/install.php
+echo "[✓] install/install.php eliminado"
+
+# Seguridad: session.cookie_httponly evita que JS lea la cookie de sesion
+PHP_VER=$(php -r 'echo PHP_MAJOR_VERSION.".".PHP_MINOR_VERSION;')
+echo "session.cookie_httponly = On" > "/etc/php/$PHP_VER/apache2/conf.d/99-glpi-security.ini"
+echo "[✓] session.cookie_httponly activado (PHP $PHP_VER)"
 
 # Paso 8: Arrancar Apache
 systemctl restart apache2

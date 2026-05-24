@@ -102,6 +102,6 @@ Esto cubre todas las VLANs on-prem que tienen que ser alcanzables desde AWS (ges
 
 ---
 
-* **AWS.md** — visión general y decisiones de diseño
-* **AWS-VPN.md** — cómo está montado el gateway WireGuard hacia el que apuntan las rutas on-prem
-* **AWS-SEGURIDAD.md** — Security Groups que se aplican sobre estas subnets
+* **G2-A-59 — AWS.md** — visión general y decisiones de diseño
+* **G2-A-60 — AWS-VPN.md** — cómo está montado el gateway WireGuard hacia el que apuntan las rutas on-prem
+* **G2-A-61 — AWS-SEGURIDAD.md** — Security Groups que se aplican sobre estas subnets

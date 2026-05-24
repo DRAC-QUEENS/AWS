@@ -21,6 +21,23 @@ source "amazon-ebs" "glpi" {
   ssh_username  = "ubuntu"
   ami_name      = "glpi-base-${var.glpi_version}-{{timestamp}}"
 
+  # VPC y subnet resueltas por tag (no hardcodeadas) para que sobrevivan a
+  # recreaciones de infra. La default VPC se ha borrado, asi que Packer
+  # necesita VPC + subnet explicitas para no fallar con "no default VPC".
+  vpc_filter {
+    filters = {
+      "tag:Name" = "vpc-dracs"
+    }
+  }
+  subnet_filter {
+    filters = {
+      "tag:Name" = "subnet-publica-a-dracs"
+    }
+    most_free = true
+    random    = false
+  }
+  associate_public_ip_address = true
+
   source_ami_filter {
     filters = {
       name                = "ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-*"
