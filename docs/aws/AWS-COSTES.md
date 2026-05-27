@@ -51,7 +51,7 @@ Stack completo: ASG + ALB + NLB en capa de red, RDS y EFS como capa de datos per
 | NAT Gateway (horas) | 1 GW | 0,045 $/h | 730 h | 32,85 $ |
 | NAT Gateway (datos) | ~10 GB/mes | 0,045 $/GB | 10 GB | 0,45 $ |
 | EIPs (×3) | NLB + WG + Nginx | 0,00 $ (adjuntas) | — | 0,00 $ |
-| S3 tfstate + backups | < 1 MB | despreciable | — | ~0,10 $ |
+| S3 tfstate | < 1 MB | despreciable | — | ~0,05 $ |
 | DynamoDB lock | PAY_PER_REQUEST | despreciable | — | ~0,01 $ |
 | **Total mensual** | | | | **~113,25 $** |
 

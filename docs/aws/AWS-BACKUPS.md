@@ -10,9 +10,8 @@ Política simple, todo nativo AWS, sin Lambda ni código custom.
 |---------|--------|-----------|-----------|
 | **RDS** (BD GLPI) | Snapshots automáticos diarios | 30 días | $0 (incluido) |
 | **EFS** (archivos GLPI) | Snapshots AWS Backup nativos | 35 días | ~$0.05/GB |
-| **S3 bucket** (`dracs-backups-*`) | Bajo demanda (dumps manuales) | 30d → Glacier, 365d → expira | ~$0.03/GB |
 
-**Coste total estimado:** <$0.30/mes (≈ 0.4% del coste total DRACS).
+**Coste total estimado:** <$0.30/mes.
 
 ---
 
@@ -41,7 +40,7 @@ resource "aws_db_instance" "glpi" {
 }
 ```
 
-AWS RDS hace snapshots automáticos cada noche durante la ventana de backup (configurable, default 03:00-04:00 UTC) y los retiene 30 días.
+AWS RDS hace snapshots automáticos cada noche durante la ventana de backup (default 03:00-04:00 UTC) y los retiene 30 días.
 
 ### 2. EFS — backup policy nativa
 **Archivo:** `backups.tf`
@@ -56,17 +55,6 @@ resource "aws_efs_backup_policy" "glpi" {
 ```
 
 Activa el **AWS Backup default plan** que toma snapshots diarios y los retiene 35 días en el vault `Default`.
-
-### 3. S3 — bucket para dumps manuales
-**Archivo:** `backups.tf`
-
-```hcl
-resource "aws_s3_bucket" "backups" {
-  bucket = "dracs-backups-${data.aws_caller_identity.current.account_id}"
-}
-```
-
-Lifecycle: 30d → Glacier, 365d → expira. **No se llena automáticamente** — es un destino para dumps manuales.
 
 ---
 
@@ -90,7 +78,7 @@ aws rds describe-db-snapshots \
 
 ### EFS
 ```bash
-# Sustituye <EFS_ID> por el ID real (terraform output o aws efs describe-file-systems)
+# Sustituye <EFS_ID> por el ID real (terraform output efs_id)
 aws efs describe-backup-policy --file-system-id <EFS_ID>
 # Esperado: BackupPolicy.Status = "ENABLED"
 
@@ -121,39 +109,9 @@ aws rds create-db-snapshot \
 aws rds wait db-snapshot-completed --db-snapshot-identifier "$SNAPSHOT_ID"
 ```
 
-Estos snapshots **manuales** no expiran automáticamente (a diferencia de los automated). Bórralos cuando ya no los necesites:
+Estos snapshots **manuales** no expiran automáticamente. Bórralos cuando ya no los necesites:
 ```bash
 aws rds delete-db-snapshot --db-snapshot-identifier "$SNAPSHOT_ID"
-```
-
-### Dump SQL portable a S3 (para protección de larga duración)
-
-Útil si quieres un backup que sobreviva más de 30 días, o que sea portable fuera de AWS:
-
-```bash
-ACC_ID=$(aws sts get-caller-identity --query Account --output text)
-DATE=$(date +%F)
-
-mysqldump \
-  -h $(terraform output -raw rds_endpoint) \
-  -u glpi \
-  -p"$GLPI_DB_PASSWORD" \
-  --single-transaction \
-  --routines \
-  glpi \
-  | gzip \
-  | aws s3 cp - "s3://dracs-backups-${ACC_ID}/manual/glpi-${DATE}.sql.gz"
-```
-
-El bucket tiene lifecycle automático: 30d → Glacier, 365d → expira.
-
-### Snapshot manual de EFS
-
-```bash
-aws backup start-backup-job \
-  --backup-vault-name Default \
-  --resource-arn "arn:aws:elasticfilesystem:eu-west-1:${ACC_ID}:file-system/<EFS_ID>" \
-  --iam-role-arn "arn:aws:iam::${ACC_ID}:role/service-role/AWSBackupDefaultServiceRole"
 ```
 
 ---
@@ -180,43 +138,19 @@ Vía consola AWS Backup → Vault `Default` → seleccionar recovery point → R
 
 Restaura a un EFS nuevo. Luego copiar archivos al EFS original (o cambiar mount targets).
 
-### Restaurar desde dump SQL en S3
-```bash
-aws s3 cp s3://dracs-backups-${ACC_ID}/manual/glpi-2026-05-24.sql.gz - \
-  | gunzip \
-  | mysql -h <RDS_ENDPOINT> -u glpi -p glpi
-```
-
 ---
 
 ## Riesgos conocidos
 
-1. **`aws_efs_backup_policy` puede fallar en AWS Academy** si `AWSBackupDefaultServiceRole` no existe. Si el `terraform apply` falla con error de IAM en este recurso:
-   - Comentar el recurso en `backups.tf`
-   - EFS queda sin backup automático
-   - Mitigación: dumps manuales periódicos del EFS (tar + S3)
+1. **`aws_efs_backup_policy` puede fallar en AWS Academy** si `AWSBackupDefaultServiceRole` no existe. Si el `terraform apply` falla con error de IAM en este recurso, comentar el recurso en `backups.tf`. EFS quedaría sin backup automático.
 
-2. **`skip_final_snapshot = true` en RDS** (`glpi_scaling.tf` línea 55): si se destruye la instancia RDS con `terraform destroy`, **NO se guarda snapshot final**. Esto es deliberado para laboratorio, pero **muy peligroso en producción**.
-
-3. **Bucket S3 versionado**: las versiones antiguas también cuentan para el coste. Borrar versiones obsoletas manualmente si el bucket crece mucho.
-
----
-
-## Costes detallados
-
-| Concepto | Coste unitario | Estimación DRACS |
-|----------|----------------|------------------|
-| RDS automated backups | Gratis hasta el tamaño de la BD | $0 |
-| EFS backup (AWS Backup) | $0.05/GB-mes warm storage | ~$0.25/mes (5GB) |
-| S3 Standard (dumps manuales) | $0.023/GB-mes | ~$0.03/mes |
-| S3 Glacier (tras 30d) | $0.004/GB-mes | <$0.01/mes |
-| **TOTAL** | | **<$0.30/mes** |
+2. **`skip_final_snapshot = true` en RDS** (`glpi_scaling.tf`): si se destruye la instancia RDS con `terraform destroy`, **NO se guarda snapshot final**. Deliberado para laboratorio, pero **muy peligroso en producción**.
 
 ---
 
 ## Referencias cruzadas
 
-- Bucket S3 y lifecycle: [backups.tf](../../backups.tf)
-- Configuración RDS: [glpi_scaling.tf](../../glpi_scaling.tf) línea ~53
+- Configuración RDS: [glpi_scaling.tf](../../glpi_scaling.tf)
+- EFS backup policy: [backups.tf](../../backups.tf)
 - Costes globales: [AWS-COSTES.md](AWS-COSTES.md)
 - Runbook operativo: [AWS-RUNBOOK.md](AWS-RUNBOOK.md)

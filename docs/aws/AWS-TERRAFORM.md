@@ -15,8 +15,8 @@ Toda la infraestructura está descrita como código en Terraform. El repo contie
 | `security.tf` | Los 6 Security Groups |
 | `instances.tf` | EC2 WireGuard (con EIP) + EC2 Nginx (sólo IP privada) |
 | `glpi_scaling.tf` | EFS, RDS, ALB (HTTP+HTTPS), NLB, Launch Template, Auto Scaling Group, listeners, target groups y política de autoescalado por CPU |
-| `backups.tf` | Bucket S3 de backups de aplicación (lifecycle a Glacier 30d, expiración 365d) + EFS backup policy nativa. Política completa |
-| `outputs.tf` | Outputs principales (DNS ALB, EIP NLB, EIP WG, endpoint RDS, ID EFS, buckets S3) |
+| `backups.tf` | EFS backup policy nativa (snapshots diarios, 35 días). Política completa en [AWS-BACKUPS.md](AWS-BACKUPS.md) |
+| `outputs.tf` | Outputs principales (DNS ALB, EIP NLB, EIP WG, endpoint RDS, ID EFS) |
 | `packer/glpi.pkr.hcl` | Plantilla Packer para construir la AMI custom con GLPI pre-instalado |
 | `user_data/wireguard.sh.tpl` | Bootstrap del WG EC2 (claves inyectadas vía `templatefile`) |
 | `user_data/nginx.sh.tpl` | Bootstrap del Nginx EC2 (URL pública inyectada vía `templatefile`) |
@@ -98,7 +98,6 @@ El bucket tiene `lifecycle { prevent_destroy = true }` para que un `terraform de
 | `rds_endpoint` | Para tests manuales contra la BD |
 | `efs_id` | Para hacer `mount -t nfs4` desde un instancia externa al stack |
 | `tfstate_bucket` | Nombre del bucket S3 del state |
-| `backups_bucket` | Nombre del bucket de backups de aplicación |
 
 # 5. Migración entre cuentas
 
