@@ -30,3 +30,31 @@ override.tf.json
 
 # Resumen personal para revision offline, no forma parte del repo final
 INFRAESTRUCTURA.md
+
+# Terraform state con cualquier nombre (no solo terraform.*)
+*.tfstate
+*.tfstate.backup
+*.tfstate.lock.info
+
+# user_data renderizados: solo se versionan las plantillas .tpl
+user_data/*.sh
+!user_data/*.sh.tpl
+
+# Claves, certificados y SSH
+*.pem
+*.key
+*.pfx
+*.p12
+id_rsa
+id_ed25519
+*.crt
+
+# Credenciales y entornos varios
+.envrc
+credentials
+.aws/
+
+# Docs operativas que han contenido secretos en el pasado
+WIREGUARD_BOOT_STATUS.md
+WIREGUARD_SETUP.md
+WIREGUARD_MANUAL.md
